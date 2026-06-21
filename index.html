@@ -8,6 +8,90 @@
   </head>
   <body>
     <main class="shell">
+      <section class="start-screen" id="startScreen" aria-label="火柴人羽毛球开始界面">
+        <div class="start-copy">
+          <p class="eyebrow">Arcade Badminton</p>
+          <h1>火柴人羽毛球</h1>
+          <p id="startSummary">选择模式，抢落点、跳扣杀，先到 7 分且领先 2 分获胜。</p>
+        </div>
+
+        <div class="start-preview" aria-hidden="true">
+          <img src="./assets/generated/images/pixel-court-selected.png" alt="" />
+          <div class="preview-score">
+            <span>蓝队</span>
+            <strong>0 : 0</strong>
+            <span>红队</span>
+          </div>
+        </div>
+
+        <div class="start-menu" aria-label="开局设置">
+          <div class="mode-grid" aria-label="模式选择">
+            <button class="mode-card active" type="button" data-match-mode="solo">
+              <span class="mode-icon">1P</span>
+              <strong>单人挑战</strong>
+              <small>蓝队对战红队 AI</small>
+            </button>
+            <button class="mode-card" type="button" data-match-mode="local">
+              <span class="mode-icon">2P</span>
+              <strong>本地双人</strong>
+              <small>同屏键盘或触控对战</small>
+            </button>
+            <button class="mode-card" type="button" data-match-mode="online">
+              <span class="mode-icon">NET</span>
+              <strong>多人联机</strong>
+              <small>手动配对的浏览器 P2P</small>
+            </button>
+          </div>
+
+          <div class="option-grid">
+            <div class="option-group" aria-label="难度选择">
+              <span>难度</span>
+              <div class="menu-row">
+                <button class="choice active" type="button" data-difficulty="easy">休闲</button>
+                <button class="choice" type="button" data-difficulty="normal">普通</button>
+                <button class="choice" type="button" data-difficulty="hard">高手</button>
+              </div>
+            </div>
+            <div class="option-group" aria-label="赛制选择">
+              <span>赛制</span>
+              <div class="menu-row compact">
+                <button class="choice active" type="button" data-target-score="7">7分</button>
+                <button class="choice" type="button" data-target-score="11">11分</button>
+              </div>
+            </div>
+            <div class="option-group" aria-label="玩法选择">
+              <span>球路</span>
+              <div class="menu-row compact">
+                <button class="choice active" type="button" data-style="standard">标准</button>
+                <button class="choice" type="button" data-style="fun">趣味</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="online-panel" id="onlinePanel" hidden>
+            <div class="online-status" id="onlineStatus">未连接 | 房主控制蓝队，加入方控制红队</div>
+            <div class="online-actions">
+              <button id="createRoomButton" type="button">创建房间</button>
+              <button id="joinRoomButton" type="button">加入房间</button>
+              <button id="acceptAnswerButton" type="button">完成连接</button>
+              <button id="copySignalButton" type="button">复制本机码</button>
+              <button id="resetOnlineButton" type="button">断开</button>
+            </div>
+            <label>
+              本机码
+              <textarea id="localSignal" rows="3" readonly placeholder="创建或加入后生成，发送给对手"></textarea>
+            </label>
+            <label>
+              对手码
+              <textarea id="remoteSignal" rows="3" placeholder="粘贴对手发来的配对码"></textarea>
+            </label>
+          </div>
+
+          <button id="startButton" class="primary-start" type="button">开始游戏</button>
+        </div>
+      </section>
+
+      <section class="game-stage hidden" id="gameStage" aria-label="比赛界面">
       <section class="game-wrap" aria-label="火柴人羽毛球游戏">
         <canvas id="game" width="960" height="540"></canvas>
 
@@ -36,24 +120,7 @@
           <div class="panel">
             <h1>火柴人羽毛球</h1>
             <p id="overlayText">抢落点、跳扣杀，先到 7 分获胜。</p>
-            <div class="menu-row compact" aria-label="人数选择">
-              <button class="choice active" type="button" data-player-mode="single">单人</button>
-              <button class="choice" type="button" data-player-mode="double">双人</button>
-            </div>
-            <div class="menu-row" aria-label="难度选择">
-              <button class="choice active" type="button" data-difficulty="easy">休闲</button>
-              <button class="choice" type="button" data-difficulty="normal">普通</button>
-              <button class="choice" type="button" data-difficulty="hard">高手</button>
-            </div>
-            <div class="menu-row compact" aria-label="赛制选择">
-              <button class="choice active" type="button" data-target-score="7">7分</button>
-              <button class="choice" type="button" data-target-score="11">11分</button>
-            </div>
-            <div class="menu-row compact" aria-label="玩法选择">
-              <button class="choice active" type="button" data-style="standard">标准</button>
-              <button class="choice" type="button" data-style="fun">趣味</button>
-            </div>
-            <button id="startButton" type="button">开始游戏</button>
+            <button id="overlayActionButton" type="button">继续</button>
           </div>
         </div>
       </section>
@@ -96,6 +163,7 @@
           <h2>红队</h2>
           <p><kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳跃 <kbd>1</kbd> 挥拍 <kbd>2</kbd> 扣杀/挑球 <kbd>↓</kbd> 网前小球</p>
         </div>
+      </section>
       </section>
     </main>
 

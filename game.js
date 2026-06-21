@@ -3,9 +3,12 @@
   const ctx = canvas.getContext("2d");
   const leftScoreEl = document.getElementById("leftScore");
   const rightScoreEl = document.getElementById("rightScore");
+  const startScreen = document.getElementById("startScreen");
+  const gameStage = document.getElementById("gameStage");
   const overlay = document.getElementById("overlay");
   const overlayText = document.getElementById("overlayText");
   const startButton = document.getElementById("startButton");
+  const overlayActionButton = document.getElementById("overlayActionButton");
   const modeButton = document.getElementById("modeButton");
   const assistButton = document.getElementById("assistButton");
   const soundButton = document.getElementById("soundButton");
@@ -13,10 +16,20 @@
   const resetButton = document.getElementById("resetButton");
   const modeLabel = document.getElementById("modeLabel");
   const statusStrip = document.getElementById("statusStrip");
-  const playerModeButtons = [...document.querySelectorAll("[data-player-mode]")];
+  const startSummary = document.getElementById("startSummary");
+  const matchModeButtons = [...document.querySelectorAll("[data-match-mode]")];
   const difficultyButtons = [...document.querySelectorAll("[data-difficulty]")];
   const targetScoreButtons = [...document.querySelectorAll("[data-target-score]")];
   const styleButtons = [...document.querySelectorAll("[data-style]")];
+  const onlinePanel = document.getElementById("onlinePanel");
+  const onlineStatus = document.getElementById("onlineStatus");
+  const createRoomButton = document.getElementById("createRoomButton");
+  const joinRoomButton = document.getElementById("joinRoomButton");
+  const acceptAnswerButton = document.getElementById("acceptAnswerButton");
+  const copySignalButton = document.getElementById("copySignalButton");
+  const resetOnlineButton = document.getElementById("resetOnlineButton");
+  const localSignal = document.getElementById("localSignal");
+  const remoteSignal = document.getElementById("remoteSignal");
   const touchButtons = [...document.querySelectorAll("[data-hold], [data-tap]")];
 
   const W = canvas.width;
@@ -36,11 +49,14 @@
 
   const keys = new Set();
   const taps = new Set();
+  const inputBuffer = new Map();
+  const remoteKeys = new Set();
   const settingsKey = "stick-badminton-settings";
 
   const state = {
     running: false,
     paused: false,
+    matchMode: "solo",
     singlePlayer: true,
     difficulty: "easy",
     targetScore: 7,
@@ -52,6 +68,7 @@
     serveSide: "left",
     score: { left: 0, right: 0 },
     shake: 0,
+    hitStop: 0,
     assist: true,
     demoTime: 0,
     message: "",
@@ -63,6 +80,16 @@
     muted: false,
   };
 
+  const online = {
+    supported: "RTCPeerConnection" in window,
+    pc: null,
+    channel: null,
+    role: null,
+    connected: false,
+    lastSnapshot: 0,
+    lastInputSent: 0,
+  };
+
   const difficulty = {
     easy: { label: "休闲", aiSpeed: 0.74, aiError: 56, aiReact: 0.18 },
     normal: { label: "普通", aiSpeed: 0.9, aiError: 34, aiReact: 0.11 },
@@ -72,6 +99,14 @@
   const playStyles = {
     standard: { label: "标准", wind: 0, wallBounce: 0.64, netBounce: -0.38 },
     fun: { label: "趣味", wind: 95, wallBounce: 0.78, netBounce: -0.52 },
+  };
+
+  const shotTuning = {
+    perfectWindow: 0.68,
+    hitWindow: 76,
+    netRiskY: netTop + 18,
+    smashRecovery: 0.18,
+    inputBuffer: 0.16,
   };
 
   const pixelArt = loadPixelArt({
@@ -116,10 +151,13 @@
       swing: 0,
       smash: 0,
       charge: 0,
+      recovery: 0,
       foot: 0,
       onGround: true,
       lastHit: 0,
-      aiTimer: 0,
+      aiThink: 0,
+      aiTargetX: x,
+      aiShot: "clear",
     };
   }
 
@@ -147,7 +185,19 @@
     return side === "left" ? [court.left + 28, netX - 48] : [netX + 48, court.right - 28];
   }
 
+  function isOnlineGuest() {
+    return state.matchMode === "online" && online.role === "guest";
+  }
+
+  function controlledByAi(player) {
+    return player.side === "right" && state.matchMode === "solo";
+  }
+
   function resetMatch() {
+    if (isOnlineGuest()) {
+      setOnlineStatus("等待房主开局和同步比赛。");
+      return;
+    }
     state.score.left = 0;
     state.score.right = 0;
     state.winner = null;
@@ -159,14 +209,21 @@
     state.pendingServer = null;
     state.message = "";
     state.messageTimer = 0;
+    state.hitStop = 0;
     state.particles = [];
     state.serveSide = "left";
     resetRally("left");
+    startScreen.classList.add("hidden");
+    gameStage.classList.remove("hidden");
+    window.scrollTo(0, 0);
     overlay.classList.add("hidden");
     pauseButton.textContent = "暂停";
     startButton.textContent = "开始游戏";
+    overlayActionButton.textContent = "继续";
     updateHud();
     initAudio();
+    sendOnlinePacket({ type: "start" });
+    sendOnlineSnapshot(true);
   }
 
   function resetRally(server) {
@@ -181,7 +238,7 @@
     bird.vx = 0;
     bird.vy = 0;
     state.readyTimer = 0.72;
-    state.serveDelay = server === "right" && state.singlePlayer ? 0.65 : 0;
+    state.serveDelay = server === "right" && state.matchMode === "solo" ? 0.65 : 0;
     if (!state.messageTimer) {
       state.message = server === "left" ? "蓝队发球" : "红队发球";
       state.messageTimer = 1.2;
@@ -192,8 +249,8 @@
   function updateHud() {
     leftScoreEl.textContent = state.score.left;
     rightScoreEl.textContent = state.score.right;
-    modeLabel.textContent = state.singlePlayer ? "单人模式" : "双人模式";
-    syncPlayerModeButtons();
+    modeLabel.textContent = modeLabelText();
+    syncMatchModeButtons();
     const server = state.pendingServer || bird.server || state.serveSide;
     const serverLabel = server === "left" ? "蓝队发球" : "红队发球";
     const lead = Math.abs(state.score.left - state.score.right);
@@ -202,18 +259,35 @@
       state.score.right >= state.targetScore - 1 &&
       lead < 2;
     const rule = deuce ? "平分后领先2分" : `${state.targetScore}分制`;
-    statusStrip.textContent = `${rule} | ${serverLabel} | ${difficulty[state.difficulty].label} | ${playStyles[state.playStyle].label}`;
+    const onlineLabel =
+      state.matchMode === "online"
+        ? online.connected
+          ? "联机已连接"
+          : online.role
+            ? "联机配对中"
+            : "联机未连接"
+        : difficulty[state.difficulty].label;
+    statusStrip.textContent = `${rule} | ${serverLabel} | ${onlineLabel} | ${playStyles[state.playStyle].label}`;
+    startSummary.textContent = `${modeLabelText()} | ${state.targetScore}分制 | ${playStyles[state.playStyle].label}球路`;
     if (!state.running || state.paused) {
       overlayText.textContent = state.paused ? "比赛暂停，按 P 或点击继续。" : matchCopy();
     }
   }
 
   function matchCopy() {
+    if (state.matchMode === "online") return `联机模式：房主蓝队，对手红队，先到 ${state.targetScore} 分获胜。`;
     return `抢落点、跳扣杀，先到 ${state.targetScore} 分获胜。`;
+  }
+
+  function modeLabelText() {
+    if (state.matchMode === "online") return "联机模式";
+    if (state.matchMode === "local") return "本地双人";
+    return "单人模式";
   }
 
   function saveSettings() {
     const settings = {
+      matchMode: state.matchMode,
       singlePlayer: state.singlePlayer,
       difficulty: state.difficulty,
       targetScore: state.targetScore,
@@ -238,7 +312,9 @@
           ?.slice(settingsKey.length + 1);
       if (!raw) return;
       const settings = JSON.parse(decodeURIComponent(raw));
+      if (["solo", "local", "online"].includes(settings.matchMode)) state.matchMode = settings.matchMode;
       if (typeof settings.singlePlayer === "boolean") state.singlePlayer = settings.singlePlayer;
+      state.singlePlayer = state.matchMode === "solo";
       if (difficulty[settings.difficulty]) state.difficulty = settings.difficulty;
       if ([7, 11].includes(settings.targetScore)) state.targetScore = settings.targetScore;
       if (playStyles[settings.playStyle]) state.playStyle = settings.playStyle;
@@ -250,6 +326,7 @@
   }
 
   function applySettingsToUi() {
+    syncMatchModeButtons();
     difficultyButtons.forEach((button) => {
       button.classList.toggle("active", button.dataset.difficulty === state.difficulty);
     });
@@ -261,32 +338,48 @@
     });
     assistButton.textContent = state.assist ? "辅助" : "硬核";
     soundButton.textContent = state.muted ? "静音" : "音效";
+    onlinePanel.hidden = state.matchMode !== "online";
     updateHud();
   }
 
-  function setPlayerMode(singlePlayer, restart = false) {
-    state.singlePlayer = singlePlayer;
+  function setMatchMode(matchMode, restart = false) {
+    state.matchMode = matchMode;
+    state.singlePlayer = matchMode === "solo";
+    if (matchMode !== "online" && online.pc) resetOnlineConnection();
+    onlinePanel.hidden = matchMode !== "online";
     saveSettings();
     updateHud();
     if (restart && state.running) resetMatch();
   }
 
-  function syncPlayerModeButtons() {
-    playerModeButtons.forEach((button) => {
-      const shouldBeActive =
-        (state.singlePlayer && button.dataset.playerMode === "single") ||
-        (!state.singlePlayer && button.dataset.playerMode === "double");
-      button.classList.toggle("active", shouldBeActive);
+  function syncMatchModeButtons() {
+    matchModeButtons.forEach((button) => {
+      button.classList.toggle("active", button.dataset.matchMode === state.matchMode);
     });
   }
 
   function keyDown(code) {
-    if (!keys.has(code)) taps.add(code);
+    if (!keys.has(code)) {
+      taps.add(code);
+      inputBuffer.set(code, shotTuning.inputBuffer);
+    }
     keys.add(code);
   }
 
   function keyUp(code) {
     keys.delete(code);
+  }
+
+  function buffered(code) {
+    return taps.has(code) || (inputBuffer.get(code) || 0) > 0;
+  }
+
+  function updateInputBuffer(dt) {
+    inputBuffer.forEach((time, code) => {
+      const next = time - dt;
+      if (next <= 0) inputBuffer.delete(code);
+      else inputBuffer.set(code, next);
+    });
   }
 
   window.addEventListener("keydown", (event) => {
@@ -297,14 +390,19 @@
     }
     if (event.key.toLowerCase() === "p" && state.running) togglePause();
     if (event.key === "Enter" && !state.running) resetMatch();
+    sendOnlineInput();
   });
 
   window.addEventListener("keyup", (event) => {
     const code = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     keyUp(code);
+    sendOnlineInput();
   });
 
   startButton.addEventListener("click", () => {
+    resetMatch();
+  });
+  overlayActionButton.addEventListener("click", () => {
     if (state.paused) togglePause();
     else resetMatch();
   });
@@ -322,11 +420,11 @@
     if (!state.muted) initAudio();
   });
   modeButton.addEventListener("click", () => {
-    setPlayerMode(!state.singlePlayer, true);
+    setMatchMode(state.matchMode === "solo" ? "local" : "solo", true);
   });
-  playerModeButtons.forEach((button) => {
+  matchModeButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      setPlayerMode(button.dataset.playerMode === "single", true);
+      setMatchMode(button.dataset.matchMode, state.running);
     });
   });
   difficultyButtons.forEach((button) => {
@@ -335,7 +433,7 @@
       difficultyButtons.forEach((item) => item.classList.toggle("active", item === button));
       saveSettings();
       updateHud();
-      if (state.running && state.singlePlayer) resetMatch();
+      if (state.running && state.matchMode === "solo") resetMatch();
     });
   });
   targetScoreButtons.forEach((button) => {
@@ -359,15 +457,23 @@
   touchButtons.forEach((button) => {
     const hold = button.dataset.hold;
     const tap = button.dataset.tap;
+    let startY = 0;
     const begin = (event) => {
       event.preventDefault();
+      startY = event.clientY;
       if (hold) keyDown(hold);
       if (tap) keyDown(tap);
+      sendOnlineInput();
     };
     const end = (event) => {
       event.preventDefault();
+      if (tap && event.clientY - startY > 22) {
+        const dropKey = tap === "j" ? "s" : tap === "1" ? "ArrowDown" : null;
+        if (dropKey) keyDown(dropKey);
+      }
       if (hold) keyUp(hold);
       if (tap) keyUp(tap);
+      sendOnlineInput();
     };
     button.addEventListener("pointerdown", begin);
     button.addEventListener("pointerup", end);
@@ -375,13 +481,289 @@
     button.addEventListener("pointerleave", end);
   });
 
+  createRoomButton.addEventListener("click", createOnlineRoom);
+  joinRoomButton.addEventListener("click", joinOnlineRoom);
+  acceptAnswerButton.addEventListener("click", acceptOnlineAnswer);
+  copySignalButton.addEventListener("click", copyLocalSignal);
+  resetOnlineButton.addEventListener("click", resetOnlineConnection);
+
+  function setOnlineStatus(text) {
+    onlineStatus.textContent = text;
+    updateHud();
+  }
+
+  function onlineConfig() {
+    return { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  }
+
+  function makeSignal(description) {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(description))));
+  }
+
+  function readSignal(value) {
+    return JSON.parse(decodeURIComponent(escape(atob(value.trim()))));
+  }
+
+  async function waitForIceGathering(pc) {
+    if (pc.iceGatheringState === "complete") return;
+    await new Promise((resolve) => {
+      const done = () => {
+        if (pc.iceGatheringState === "complete") {
+          pc.removeEventListener("icegatheringstatechange", done);
+          resolve();
+        }
+      };
+      pc.addEventListener("icegatheringstatechange", done);
+      setTimeout(resolve, 2400);
+    });
+  }
+
+  function preparePeer(role) {
+    if (!online.supported) {
+      setOnlineStatus("当前浏览器不支持 WebRTC 数据通道。");
+      return null;
+    }
+    resetOnlineConnection(false);
+    online.role = role;
+    online.pc = new RTCPeerConnection(onlineConfig());
+    online.pc.onconnectionstatechange = () => {
+      const status = online.pc.connectionState;
+      online.connected = status === "connected";
+      if (online.connected) setOnlineStatus(role === "host" ? "已连接 | 你控制蓝队" : "已连接 | 你控制红队");
+      else if (["failed", "disconnected", "closed"].includes(status)) setOnlineStatus(`连接状态：${status}`);
+    };
+    return online.pc;
+  }
+
+  function attachOnlineChannel(channel) {
+    online.channel = channel;
+    channel.onopen = () => {
+      online.connected = true;
+      setOnlineStatus(online.role === "host" ? "已连接 | 你控制蓝队" : "已连接 | 你控制红队");
+      sendOnlineInput(true);
+      if (online.role === "host") sendOnlineSnapshot(true);
+    };
+    channel.onclose = () => {
+      online.connected = false;
+      setOnlineStatus("连接已断开。");
+    };
+    channel.onmessage = (event) => {
+      const packet = JSON.parse(event.data);
+      if (packet.type === "input" && online.role === "host") {
+        remoteKeys.clear();
+        packet.keys.forEach((code) => remoteKeys.add(code));
+      }
+      if (packet.type === "snapshot" && online.role === "guest") {
+        applyOnlineSnapshot(packet);
+      }
+      if (packet.type === "start" && online.role === "guest") {
+        startScreen.classList.add("hidden");
+        gameStage.classList.remove("hidden");
+        overlay.classList.add("hidden");
+      }
+    };
+  }
+
+  async function createOnlineRoom() {
+    setMatchMode("online", false);
+    const pc = preparePeer("host");
+    if (!pc) return;
+    attachOnlineChannel(pc.createDataChannel("badminton"));
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    await waitForIceGathering(pc);
+    localSignal.value = makeSignal(pc.localDescription);
+    setOnlineStatus("房间已创建 | 把本机码发给对手，再粘贴对手返回码并点完成连接。");
+  }
+
+  async function joinOnlineRoom() {
+    setMatchMode("online", false);
+    const pc = preparePeer("guest");
+    if (!pc) return;
+    pc.ondatachannel = (event) => attachOnlineChannel(event.channel);
+    try {
+      await pc.setRemoteDescription(readSignal(remoteSignal.value));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      await waitForIceGathering(pc);
+      localSignal.value = makeSignal(pc.localDescription);
+      setOnlineStatus("已生成对手码 | 发回给房主等待连接。");
+    } catch {
+      setOnlineStatus("对手码无法识别，请确认完整复制。");
+    }
+  }
+
+  async function acceptOnlineAnswer() {
+    if (!online.pc || online.role !== "host") {
+      setOnlineStatus("请先创建房间。");
+      return;
+    }
+    try {
+      await online.pc.setRemoteDescription(readSignal(remoteSignal.value));
+      setOnlineStatus("正在连接对手...");
+    } catch {
+      setOnlineStatus("对手码无法识别，请确认完整复制。");
+    }
+  }
+
+  async function copyLocalSignal() {
+    if (!localSignal.value) return;
+    try {
+      await navigator.clipboard.writeText(localSignal.value);
+      setOnlineStatus("本机码已复制。");
+    } catch {
+      localSignal.select();
+      setOnlineStatus("已选中本机码，请手动复制。");
+    }
+  }
+
+  function resetOnlineConnection(clearSignals = true) {
+    if (online.channel) online.channel.close();
+    if (online.pc) online.pc.close();
+    online.pc = null;
+    online.channel = null;
+    online.role = null;
+    online.connected = false;
+    remoteKeys.clear();
+    if (clearSignals) {
+      localSignal.value = "";
+      remoteSignal.value = "";
+      setOnlineStatus("未连接 | 房主控制蓝队，加入方控制红队");
+    }
+  }
+
+  function keySetFor(side) {
+    if (state.matchMode === "online" && online.role === "host" && side === "right") return remoteKeys;
+    return keys;
+  }
+
+  function keyHeld(side, code) {
+    return keySetFor(side).has(code);
+  }
+
+  function keyBuffered(side, code) {
+    if (keySetFor(side) !== keys) return remoteKeys.has(code);
+    return buffered(code);
+  }
+
+  function sendOnlineInput(force = false) {
+    if (state.matchMode !== "online" || online.role !== "guest" || !online.channel) return;
+    if (online.channel.readyState !== "open") return;
+    const now = performance.now();
+    if (!force && now - online.lastInputSent < 26) return;
+    online.lastInputSent = now;
+    online.channel.send(JSON.stringify({ type: "input", keys: [...keys] }));
+  }
+
+  function sendOnlinePacket(packet) {
+    if (state.matchMode !== "online" || online.role !== "host" || !online.channel) return;
+    if (online.channel.readyState !== "open") return;
+    online.channel.send(JSON.stringify(packet));
+  }
+
+  function packPlayer(player) {
+    return {
+      x: player.x,
+      y: player.y,
+      vx: player.vx,
+      vy: player.vy,
+      facing: player.facing,
+      swing: player.swing,
+      smash: player.smash,
+      charge: player.charge,
+      recovery: player.recovery,
+      foot: player.foot,
+      onGround: player.onGround,
+      lastHit: player.lastHit,
+      aiTargetX: player.aiTargetX,
+      aiShot: player.aiShot,
+    };
+  }
+
+  function packBird() {
+    return {
+      x: bird.x,
+      y: bird.y,
+      vx: bird.vx,
+      vy: bird.vy,
+      angle: bird.angle,
+      spin: bird.spin,
+      served: bird.served,
+      server: bird.server,
+      lastTouched: bird.lastTouched,
+      trail: bird.trail.slice(0, 12),
+    };
+  }
+
+  function sendOnlineSnapshot(force = false) {
+    if (state.matchMode !== "online" || online.role !== "host") return;
+    const now = performance.now();
+    if (!force && now - online.lastSnapshot < 50) return;
+    online.lastSnapshot = now;
+    sendOnlinePacket({
+      type: "snapshot",
+      running: state.running,
+      paused: state.paused,
+      winner: state.winner,
+      rallyPause: state.rallyPause,
+      readyTimer: state.readyTimer,
+      serveDelay: state.serveDelay,
+      serveSide: state.serveSide,
+      score: state.score,
+      shake: state.shake,
+      assist: state.assist,
+      message: state.message,
+      messageTimer: state.messageTimer,
+      pendingServer: state.pendingServer,
+      targetScore: state.targetScore,
+      playStyle: state.playStyle,
+      left: packPlayer(left),
+      right: packPlayer(right),
+      bird: packBird(),
+    });
+  }
+
+  function applyOnlineSnapshot(packet) {
+    state.running = packet.running;
+    state.paused = packet.paused;
+    state.winner = packet.winner;
+    state.rallyPause = packet.rallyPause;
+    state.readyTimer = packet.readyTimer;
+    state.serveDelay = packet.serveDelay;
+    state.serveSide = packet.serveSide;
+    state.score.left = packet.score.left;
+    state.score.right = packet.score.right;
+    state.shake = packet.shake;
+    state.assist = packet.assist;
+    state.message = packet.message;
+    state.messageTimer = packet.messageTimer;
+    state.pendingServer = packet.pendingServer;
+    state.targetScore = packet.targetScore;
+    state.playStyle = packet.playStyle;
+    Object.assign(left, packet.left);
+    Object.assign(right, packet.right);
+    Object.assign(bird, packet.bird);
+    updateHud();
+    if (state.running) {
+      startScreen.classList.add("hidden");
+      gameStage.classList.remove("hidden");
+      overlay.classList.toggle("hidden", !state.paused);
+    }
+    if (state.winner) {
+      overlayText.textContent = `${state.winner === "left" ? "蓝队" : "红队"}获胜，等待房主再开一局。`;
+      overlayActionButton.textContent = "等待房主";
+      overlay.classList.remove("hidden");
+    }
+  }
+
   function togglePause() {
-    if (!state.running) return;
+    if (!state.running || isOnlineGuest()) return;
     state.paused = !state.paused;
     pauseButton.textContent = state.paused ? "继续" : "暂停";
     overlayText.textContent = state.paused ? "比赛暂停，按 P 或点击继续。" : matchCopy();
-    startButton.textContent = "继续";
+    overlayActionButton.textContent = state.paused ? "继续" : "再来一局";
     overlay.classList.toggle("hidden", !state.paused);
+    sendOnlineSnapshot(true);
   }
 
   function initAudio() {
@@ -410,29 +792,53 @@
   }
 
   function axisFor(player) {
+    const keySet = keySetFor(player.side);
     if (player.side === "left") {
-      return Number(keys.has("d")) - Number(keys.has("a"));
+      return Number(keySet.has("d")) - Number(keySet.has("a"));
     }
-    if (!state.singlePlayer) {
-      return Number(keys.has("ArrowRight")) - Number(keys.has("ArrowLeft"));
+    if (!controlledByAi(player)) {
+      return Number(keySet.has("ArrowRight")) - Number(keySet.has("ArrowLeft"));
     }
     return aiMoveAxis(player) * difficulty[state.difficulty].aiSpeed;
   }
 
   function aiMoveAxis(player) {
-    const profile = difficulty[state.difficulty];
-    const miss = Math.sin(performance.now() / 530) * profile.aiError;
-    const target = predictLandingX() + miss;
-    const ideal = clamp(target, netX + 88, W - 118);
-    const distance = ideal - player.x;
     if (!bird.served && bird.server === "right") return player.x > 720 ? -1 : 0;
+    const ideal = clamp(player.aiTargetX, netX + 72, W - 112);
+    const distance = ideal - player.x;
     if (Math.abs(distance) < 18) return 0;
     return Math.sign(distance);
   }
 
+  function updateAiIntent(player, dt) {
+    if (!controlledByAi(player)) return;
+    const profile = difficulty[state.difficulty];
+    player.aiThink -= dt;
+    if (player.aiThink > 0) return;
+
+    const landingX = predictLandingX();
+    const missWave = Math.sin(performance.now() / 530) * profile.aiError;
+    const panic = bird.x > netX && bird.y > ground - 92 ? profile.aiError * 0.35 : 0;
+    const netBias = bird.x > netX && bird.x < netX + 112 ? -34 : 0;
+    player.aiTargetX = clamp(landingX + missWave + panic + netBias, netX + 72, W - 112);
+
+    const distance = Math.abs(bird.x - player.x);
+    const canAttack = bird.x > netX && bird.y < 268 && distance < 92;
+    const canDrop = bird.x > netX && bird.y < 340 && player.x < netX + 190;
+    const roll = Math.random();
+    if (canAttack && state.difficulty !== "easy" && roll > (state.difficulty === "hard" ? 0.22 : 0.56)) {
+      player.aiShot = "smash";
+    } else if (canDrop && roll < (state.difficulty === "hard" ? 0.34 : 0.18)) {
+      player.aiShot = "drop";
+    } else {
+      player.aiShot = landingX > W - 205 ? "clear" : "drive";
+    }
+    player.aiThink = profile.aiReact + (state.difficulty === "easy" ? 0.16 : state.difficulty === "normal" ? 0.08 : 0.035);
+  }
+
   function wantsJump(player) {
-    if (player.side === "left") return taps.has("w");
-    if (!state.singlePlayer) return taps.has("ArrowUp");
+    if (player.side === "left") return keyBuffered(player.side, "w");
+    if (!controlledByAi(player)) return keyBuffered(player.side, "ArrowUp");
     const profile = difficulty[state.difficulty];
     return (
       bird.x > netX &&
@@ -443,24 +849,29 @@
   }
 
   function wantsSwing(player) {
-    if (player.side === "left") return taps.has("j");
-    if (!state.singlePlayer) return taps.has("1");
+    if (player.side === "left") return keyBuffered(player.side, "j");
+    if (!controlledByAi(player)) return keyBuffered(player.side, "1");
     if (!bird.served && bird.server === "right") return state.serveDelay <= 0;
-    const profile = difficulty[state.difficulty];
-    return bird.x > netX && distanceToRacket(player) < 70 && bird.y < ground - 28 && Math.random() > profile.aiReact;
+    return (
+      bird.x > netX &&
+      distanceToRacket(player) < 70 &&
+      bird.y < ground - 28 &&
+      (player.aiShot !== "smash" || bird.y > 232)
+    );
   }
 
   function wantsSmash(player) {
-    if (player.side === "left") return taps.has("k");
-    if (!state.singlePlayer) return taps.has("2");
-    return bird.x > netX && bird.y < 260 && distanceToRacket(player) < 76;
+    if (player.side === "left") return keyBuffered(player.side, "k");
+    if (!controlledByAi(player)) return keyBuffered(player.side, "2");
+    return player.aiShot === "smash" && bird.x > netX && bird.y < 280 && distanceToRacket(player) < 78;
   }
 
   function updatePlayer(player, dt) {
     const axis = axisFor(player);
     const [minX, maxX] = sideBounds(player.side);
-    const maxSpeed = player.onGround ? 360 : 270;
-    const accel = player.onGround ? 2600 : 1180;
+    const recovering = player.recovery > 0;
+    const maxSpeed = (player.onGround ? 360 : 270) * (recovering ? 0.62 : 1);
+    const accel = (player.onGround ? 2600 : 1180) * (recovering ? 0.55 : 1);
     const friction = player.onGround ? 0.78 : 0.96;
 
     player.vx += axis * accel * dt;
@@ -496,6 +907,7 @@
 
     player.swing = Math.max(0, player.swing - dt);
     player.smash = Math.max(0, player.smash - dt);
+    player.recovery = Math.max(0, player.recovery - dt);
     player.charge = player.smash > 0 ? 1 : Math.max(0, player.charge - dt * 5);
     player.foot += Math.abs(player.vx) * dt * 0.03;
   }
@@ -513,6 +925,39 @@
   function distanceToRacket(player) {
     const r = racketPoint(player);
     return Math.hypot(bird.x - r.x, bird.y - r.y);
+  }
+
+  function swingQuality(player, dist) {
+    const progress = clamp(player.swing / 0.26, 0, 1);
+    const timing = 1 - Math.abs(progress - shotTuning.perfectWindow) / shotTuning.perfectWindow;
+    const reach = 1 - dist / shotTuning.hitWindow;
+    return clamp(timing * 0.64 + reach * 0.36, 0, 1);
+  }
+
+  function shotContact(player) {
+    const racket = racketPoint(player);
+    return {
+      front: clamp(((bird.x - player.x) * player.facing - 42) / 54, -1, 1),
+      height: clamp((racket.y - bird.y) / 64, -1, 1),
+    };
+  }
+
+  function opponentTargetX(player, shotType, quality, contact) {
+    const attackingLeft = player.side === "left";
+    const nearNet = attackingLeft ? netX + 52 : netX - 52;
+    const farCorner = attackingLeft ? W - 118 : 118;
+    const midCourt = attackingLeft ? W - 235 : 235;
+    const spread = (1 - quality) * 72 + Math.random() * 36;
+    if (shotType === "drop") return nearNet + player.facing * (38 + spread * 0.42);
+    if (shotType === "smash") return midCourt + player.facing * (contact.front * 80 + spread * 0.5);
+    if (shotType === "drive") return midCourt + player.facing * (contact.front * 42 + spread);
+    return farCorner - player.facing * spread;
+  }
+
+  function wantsDropShot(player) {
+    if (player.side === "left") return keyHeld(player.side, "s") || keyBuffered(player.side, "s");
+    if (!controlledByAi(player)) return keyHeld(player.side, "ArrowDown") || keyBuffered(player.side, "ArrowDown");
+    return player.aiShot === "drop";
   }
 
   function serve(player) {
@@ -533,7 +978,7 @@
   function hitBird(player) {
     const dist = distanceToRacket(player);
     const sameSide = player.side === "left" ? bird.x < netX + 15 : bird.x > netX - 15;
-    if (dist > 76 || !sameSide || player.swing <= 0 || player.lastHit > 0) return;
+    if (dist > shotTuning.hitWindow || !sameSide || player.swing <= 0 || player.lastHit > 0) return;
 
     if (!bird.served) {
       serve(player);
@@ -541,30 +986,38 @@
       return;
     }
 
-    const targetX = player.side === "left" ? W - 170 - Math.random() * 120 : 170 + Math.random() * 120;
+    const quality = swingQuality(player, dist);
+    const contact = shotContact(player);
+    const smash = player.smash > 0 || (!player.onGround && bird.y < ground - 160 && quality > 0.42);
+    const dropShot = wantsDropShot(player) && !smash;
+    const drive = !smash && !dropShot && contact.front > 0.42 && quality > 0.55;
+    const targetX = opponentTargetX(player, dropShot ? "drop" : smash ? "smash" : drive ? "drive" : "clear", quality, contact);
     const dx = targetX - bird.x;
-    const smash = player.smash > 0 || (!player.onGround && bird.y < ground - 160);
-    const wantsDrop =
-      player.side === "left"
-        ? keys.has("s")
-        : !state.singlePlayer && keys.has("ArrowDown");
-    const dropShot = wantsDrop && !smash;
-    const horizontal = clamp(dx * (smash ? 1.72 : dropShot ? 0.86 : 1.24), -760, 760);
-    const lift = smash ? 118 : dropShot ? 300 : 520;
+    const lift = smash ? 108 - quality * 80 : dropShot ? 230 + (1 - quality) * 130 : drive ? 360 : 515 + contact.height * 80;
+    const pace =
+      smash ? 1.64 + quality * 0.34 : dropShot ? 0.64 + quality * 0.18 : drive ? 1.42 : 1.08 + quality * 0.24;
+    const horizontal = clamp(dx * pace + contact.front * (smash ? 130 : 72), -820, 820);
 
     bird.vx = horizontal;
     bird.vy = -lift + player.vy * 0.1;
-    if (smash) bird.vy = clamp(bird.vy, -220, 90);
+    if (smash) bird.vy = clamp(bird.vy, -210, 115);
+    if (dropShot && quality < 0.32 && bird.y > shotTuning.netRiskY) {
+      bird.vx *= 0.58;
+      bird.vy = -82;
+    }
     bird.x += player.facing * 4;
     bird.lastTouched = player.side;
-    bird.spin = player.facing * (smash ? 18 : 10);
-    player.lastHit = 0.22;
-    state.shake = smash ? 8 : 3;
-    state.message = smash ? "扣杀!" : dropShot ? "网前小球" : "回击";
-    state.messageTimer = smash ? 0.42 : 0.3;
-    burst(bird.x, bird.y, smash ? "#f8d75a" : "#f7f7ef", smash ? 13 : 8);
-    if (smash) burst(bird.x, bird.y, "rgba(248, 215, 90, 0.88)", 9, "streak", player.facing);
-    blip(smash ? 180 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : 0.026);
+    bird.spin = player.facing * (smash ? 18 + quality * 6 : dropShot ? 7 : 10 + quality * 4);
+    player.lastHit = smash ? 0.28 : 0.2;
+    if (smash) player.recovery = shotTuning.smashRecovery + (1 - quality) * 0.08;
+    const perfect = quality > 0.78;
+    state.shake = smash ? 7 + quality * 4 : perfect ? 5 : 3;
+    state.hitStop = smash ? 0.045 + quality * 0.025 : perfect ? 0.035 : 0;
+    state.message = smash ? (perfect ? "完美扣杀!" : "扣杀!") : dropShot ? (perfect ? "贴网小球" : "网前小球") : perfect ? "甜点击球" : "回击";
+    state.messageTimer = smash || perfect ? 0.48 : 0.3;
+    burst(bird.x, bird.y, smash || perfect ? "#f8d75a" : "#f7f7ef", smash ? 13 : perfect ? 11 : 8);
+    if (smash || perfect) burst(bird.x, bird.y, "rgba(248, 215, 90, 0.88)", smash ? 9 : 5, "streak", player.facing);
+    blip(smash ? 180 : perfect ? 520 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : perfect ? 0.034 : 0.026);
   }
 
   function burst(x, y, color, count, type = "spark", direction = 0) {
@@ -659,13 +1112,14 @@
       state.running = false;
       state.winner = side;
       overlayText.textContent = `${side === "left" ? "蓝队" : "红队"}获胜，按 Enter 或点击按钮再来一局。`;
-      startButton.textContent = "再来一局";
+      overlayActionButton.textContent = "再来一局";
       overlay.classList.remove("hidden");
       for (let i = 0; i < 8; i += 1) {
         const x = side === "left" ? 220 + Math.random() * 200 : 540 + Math.random() * 200;
         const y = 135 + Math.random() * 125;
         burst(x, y, i % 2 ? "#f8d75a" : side === "left" ? "#35b8ff" : "#ff5f69", 18);
       }
+      sendOnlineSnapshot(true);
       return;
     }
 
@@ -675,6 +1129,7 @@
     }
     state.rallyPause = 1.15;
     updateHud();
+    sendOnlineSnapshot(true);
   }
 
   function predictLandingX() {
@@ -694,6 +1149,11 @@
 
   function update(dt) {
     updateParticles(dt);
+    updateInputBuffer(dt);
+    if (isOnlineGuest()) {
+      sendOnlineInput();
+      return;
+    }
     if (!state.running) {
       if (!state.winner) updateDemo(dt);
       return;
@@ -717,7 +1177,13 @@
     }
     state.serveDelay = Math.max(0, state.serveDelay - dt);
     state.messageTimer = Math.max(0, state.messageTimer - dt);
+    if (state.hitStop > 0) {
+      state.hitStop = Math.max(0, state.hitStop - dt);
+      state.shake = Math.max(0, state.shake - dt * 10);
+      return;
+    }
 
+    updateAiIntent(right, dt);
     updatePlayer(left, dt);
     updatePlayer(right, dt);
     left.lastHit = Math.max(0, left.lastHit - dt);
@@ -727,6 +1193,7 @@
     hitBird(right);
     updateBird(dt);
     state.shake = Math.max(0, state.shake - dt * 18);
+    sendOnlineSnapshot();
   }
 
   function updateDemo(dt) {
@@ -1244,7 +1711,7 @@
     const label =
       bird.server === "left"
         ? "蓝队发球：J 或 K"
-        : state.singlePlayer
+        : state.matchMode === "solo"
           ? `红队发球：${Math.ceil(state.serveDelay + 0.2)}`
           : "红队发球：1 或 2";
     ctx.save();
@@ -1335,6 +1802,7 @@
     const dt = Math.min((now - last) / 1000, 0.033);
     last = now;
     update(dt);
+    sendOnlineSnapshot();
     render();
     taps.clear();
     requestAnimationFrame(frame);

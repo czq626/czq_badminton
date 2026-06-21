@@ -30,32 +30,47 @@ const js = fs.readFileSync("game.js", "utf8");
 assertIncludes(html, '<canvas id="game" width="960" height="540">', "canvas has expected 16:9 resolution");
 assertIncludes(html, '<link rel="stylesheet" href="./styles.css" />', "stylesheet is linked");
 assertIncludes(html, '<script src="./game.js"></script>', "game script is linked");
-assertIncludes(html, "先到 7 分获胜", "default overlay text matches 7-point rule");
+assertIncludes(html, "先到 7 分且领先 2 分获胜", "start screen explains win rule");
 assertMatch(js, /function matchCopy\b/, "function matchCopy");
 
 [
+  "startScreen",
+  "gameStage",
   "modeButton",
   "assistButton",
   "soundButton",
   "pauseButton",
   "resetButton",
   "startButton",
+  "overlayActionButton",
   "statusStrip",
   "leftScore",
   "rightScore",
+  "onlinePanel",
+  "onlineStatus",
+  "createRoomButton",
+  "joinRoomButton",
+  "acceptAnswerButton",
+  "copySignalButton",
+  "resetOnlineButton",
+  "localSignal",
+  "remoteSignal",
 ].forEach((id) => assertIncludes(html, `id="${id}"`, `required element #${id}`));
 
-["单人", "双人", "蓝队", "红队", "休闲", "普通", "高手", "7分", "11分", "标准", "趣味", "开始游戏", "挥拍", "扣杀", "短球"].forEach((text) =>
+["单人挑战", "本地双人", "多人联机", "蓝队", "红队", "休闲", "普通", "高手", "7分", "11分", "标准", "趣味", "开始游戏", "挥拍", "扣杀", "短球"].forEach((text) =>
   assertIncludes(html, text, `visible label ${text}`),
 );
 
-["drawCourt", "drawPlayer", "drawBird", "updateDemo", "awardPoint", "predictLandingX"].forEach((fn) =>
+["drawCourt", "drawPlayer", "drawBird", "updateDemo", "awardPoint", "predictLandingX", "createOnlineRoom", "joinOnlineRoom", "sendOnlineSnapshot", "applyOnlineSnapshot"].forEach((fn) =>
   assertMatch(js, new RegExp(`function ${fn}\\b`), `function ${fn}`),
 );
 
 [
+  "matchMode",
   "singlePlayer",
-  "playerModeButtons",
+  "matchModeButtons",
+  "RTCPeerConnection",
+  "remoteKeys",
   "difficulty",
   "targetScore",
   "playStyle",
@@ -71,7 +86,7 @@ assertMatch(js, /function matchCopy\b/, "function matchCopy");
   assertIncludes(js, token, `game state token ${token}`),
 );
 
-[".touch-controls", ".status-strip", ".overlay", "@media (max-width: 720px)"].forEach((selector) =>
+[".start-screen", ".mode-card", ".online-panel", ".touch-controls", ".status-strip", ".overlay", "@media (max-width: 720px)"].forEach((selector) =>
   assertIncludes(css, selector, `CSS rule ${selector}`),
 );
 
