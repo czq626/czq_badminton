@@ -13,6 +13,12 @@
 
 直接在浏览器打开 `index.html` 即可。
 
+GitHub Pages 发布后，试玩地址通常为：
+
+```text
+https://czq626.github.io/czq_badminton/
+```
+
 也可以在当前目录启动一个静态服务：
 
 ```bash
