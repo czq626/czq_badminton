@@ -37,9 +37,9 @@
               <small>同屏键盘或触控对战</small>
             </button>
             <button class="mode-card" type="button" data-match-mode="online">
-              <span class="mode-icon">NET</span>
-              <strong>多人联机</strong>
-              <small>手动配对的浏览器 P2P</small>
+              <span class="mode-icon">ROOM</span>
+              <strong>房间模式</strong>
+              <small>房间列表，创建或加入</small>
             </button>
           </div>
 
@@ -69,22 +69,19 @@
           </div>
 
           <div class="online-panel" id="onlinePanel" hidden>
-            <div class="online-status" id="onlineStatus">未连接 | 房主控制蓝队，加入方控制红队</div>
-            <div class="online-actions">
+            <div class="online-status" id="onlineStatus">连接房间服务后显示房间列表；离线时可本机多标签测试。</div>
+            <div class="room-server-row">
+              <label>
+                房间服务
+                <input id="roomServerInput" type="url" autocomplete="off" placeholder="ws://localhost:8787" />
+              </label>
+              <button id="refreshRoomsButton" type="button">刷新</button>
               <button id="createRoomButton" type="button">创建房间</button>
-              <button id="joinRoomButton" type="button">加入房间</button>
-              <button id="acceptAnswerButton" type="button">完成连接</button>
-              <button id="copySignalButton" type="button">复制本机码</button>
               <button id="resetOnlineButton" type="button">断开</button>
             </div>
-            <label>
-              本机码
-              <textarea id="localSignal" rows="3" readonly placeholder="创建或加入后生成，发送给对手"></textarea>
-            </label>
-            <label>
-              对手码
-              <textarea id="remoteSignal" rows="3" placeholder="粘贴对手发来的配对码"></textarea>
-            </label>
+            <div class="room-list" id="roomList" aria-label="房间列表">
+              <div class="room-empty" id="roomEmpty">暂无可加入房间。</div>
+            </div>
           </div>
 
           <button id="startButton" class="primary-start" type="button">开始游戏</button>

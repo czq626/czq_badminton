@@ -10,3 +10,11 @@
 - Added short input buffering for jump/swing/smash and mobile swipe-down drop shots from the swing buttons.
 - Added a standalone start screen with polished mode cards, match settings, and a formal preview treatment using generated court art.
 - Added a lightweight multiplayer mode using manual WebRTC room-code exchange, with host-authoritative scoring and remote red-team input sync.
+- Added a room-code flow for same-origin room play while preserving the manual WebRTC pairing fallback.
+- Reworked room mode around a refreshable room list with create/join actions, optional WebSocket room service, and local same-origin fallback.
+- Added a zero-dependency `room-server.js` for cross-device rooms and `build-single-html.js` for generating a distributable single HTML frontend.
+- Lowered the net collision/drawing height and raised long-serve arcs so standard serves clear the net more reliably.
+- Added rally heat milestones, visible multi-hit counters, and stronger feedback for extended exchanges.
+- Improved AI shot planning with pressure escapes, net pulls, back-court pushes, and more varied serve choices.
+- Added short serves and fast long serves while keeping standard high serves available.
+- Kept saved online preferences from taking over the default start screen, so returning players land back on quick solo/local play.

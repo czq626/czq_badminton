@@ -23,13 +23,12 @@
   const styleButtons = [...document.querySelectorAll("[data-style]")];
   const onlinePanel = document.getElementById("onlinePanel");
   const onlineStatus = document.getElementById("onlineStatus");
+  const roomServerInput = document.getElementById("roomServerInput");
+  const refreshRoomsButton = document.getElementById("refreshRoomsButton");
   const createRoomButton = document.getElementById("createRoomButton");
-  const joinRoomButton = document.getElementById("joinRoomButton");
-  const acceptAnswerButton = document.getElementById("acceptAnswerButton");
-  const copySignalButton = document.getElementById("copySignalButton");
   const resetOnlineButton = document.getElementById("resetOnlineButton");
-  const localSignal = document.getElementById("localSignal");
-  const remoteSignal = document.getElementById("remoteSignal");
+  const roomList = document.getElementById("roomList");
+  const roomEmpty = document.getElementById("roomEmpty");
   const touchButtons = [...document.querySelectorAll("[data-hold], [data-tap]")];
 
   const W = canvas.width;
@@ -45,13 +44,19 @@
     nearServiceLeft: 212,
     nearServiceRight: W - 212,
   };
-  const netTop = 270;
+  const netTop = 286;
 
   const keys = new Set();
   const taps = new Set();
   const inputBuffer = new Map();
   const remoteKeys = new Set();
+  const remoteTaps = new Set();
+  const remoteInputBuffer = new Map();
   const settingsKey = "stick-badminton-settings";
+  const roomServerKey = "stick-badminton-room-server";
+  const defaultRoomServer = "ws://192.168.1.103:8787";
+  const roomStorageKey = "stick-badminton-rooms";
+  const roomLobbyChannelName = "stick-badminton-lobby";
 
   const state = {
     running: false,
@@ -69,6 +74,9 @@
     score: { left: 0, right: 0 },
     shake: 0,
     hitStop: 0,
+    rallyHits: 0,
+    bestRally: 0,
+    rallyHeat: 0,
     assist: true,
     demoTime: 0,
     message: "",
@@ -81,13 +89,25 @@
   };
 
   const online = {
-    supported: "RTCPeerConnection" in window,
-    pc: null,
-    channel: null,
+    wsSupported: "WebSocket" in window,
+    localSupported: "BroadcastChannel" in window,
+    ws: null,
+    roomChannel: null,
+    lobbyChannel: null,
+    transport: "local",
     role: null,
     connected: false,
+    roomCode: "",
+    rooms: [],
+    clientId: Math.random().toString(36).slice(2, 10),
+    peerId: "",
+    refreshTimer: null,
+    heartbeatTimer: null,
     lastSnapshot: 0,
+    lastSnapshotReceived: 0,
     lastInputSent: 0,
+    pendingInputTaps: new Set(),
+    serverUrl: "",
   };
 
   const difficulty = {
@@ -107,6 +127,11 @@
     netRiskY: netTop + 18,
     smashRecovery: 0.18,
     inputBuffer: 0.16,
+  };
+
+  const onlineTuning = {
+    inputInterval: 1000 / 45,
+    snapshotInterval: 1000 / 30,
   };
 
   const pixelArt = loadPixelArt({
@@ -158,6 +183,7 @@
       aiThink: 0,
       aiTargetX: x,
       aiShot: "clear",
+      aiPlan: "neutral",
     };
   }
 
@@ -198,6 +224,14 @@
       setOnlineStatus("等待房主开局和同步比赛。");
       return;
     }
+    if (state.matchMode === "online" && !online.role) {
+      setOnlineStatus("请先创建或加入房间。");
+      return;
+    }
+    if (state.matchMode === "online" && online.role === "host" && !online.connected) {
+      setOnlineStatus(`房间 ${online.roomCode} 等待对手加入后再开局。`);
+      return;
+    }
     state.score.left = 0;
     state.score.right = 0;
     state.winner = null;
@@ -210,6 +244,9 @@
     state.message = "";
     state.messageTimer = 0;
     state.hitStop = 0;
+    state.rallyHits = 0;
+    state.bestRally = 0;
+    state.rallyHeat = 0;
     state.particles = [];
     state.serveSide = "left";
     resetRally("left");
@@ -237,6 +274,8 @@
     bird.y = 240;
     bird.vx = 0;
     bird.vy = 0;
+    state.rallyHits = 0;
+    state.rallyHeat = 0;
     state.readyTimer = 0.72;
     state.serveDelay = server === "right" && state.matchMode === "solo" ? 0.65 : 0;
     if (!state.messageTimer) {
@@ -262,9 +301,13 @@
     const onlineLabel =
       state.matchMode === "online"
         ? online.connected
-          ? "联机已连接"
+          ? online.roomCode
+            ? `房间 ${online.roomCode} 已连接`
+            : "联机已连接"
           : online.role
-            ? "联机配对中"
+            ? online.roomCode
+              ? `房间 ${online.roomCode} 等待中`
+              : "联机配对中"
             : "联机未连接"
         : difficulty[state.difficulty].label;
     statusStrip.textContent = `${rule} | ${serverLabel} | ${onlineLabel} | ${playStyles[state.playStyle].label}`;
@@ -275,12 +318,12 @@
   }
 
   function matchCopy() {
-    if (state.matchMode === "online") return `联机模式：房主蓝队，对手红队，先到 ${state.targetScore} 分获胜。`;
+    if (state.matchMode === "online") return `房间模式：房主蓝队，对手红队，先到 ${state.targetScore} 分获胜。`;
     return `抢落点、跳扣杀，先到 ${state.targetScore} 分获胜。`;
   }
 
   function modeLabelText() {
-    if (state.matchMode === "online") return "联机模式";
+    if (state.matchMode === "online") return "房间模式";
     if (state.matchMode === "local") return "本地双人";
     return "单人模式";
   }
@@ -312,7 +355,7 @@
           ?.slice(settingsKey.length + 1);
       if (!raw) return;
       const settings = JSON.parse(decodeURIComponent(raw));
-      if (["solo", "local", "online"].includes(settings.matchMode)) state.matchMode = settings.matchMode;
+      if (["solo", "local"].includes(settings.matchMode)) state.matchMode = settings.matchMode;
       if (typeof settings.singlePlayer === "boolean") state.singlePlayer = settings.singlePlayer;
       state.singlePlayer = state.matchMode === "solo";
       if (difficulty[settings.difficulty]) state.difficulty = settings.difficulty;
@@ -326,6 +369,7 @@
   }
 
   function applySettingsToUi() {
+    roomServerInput.value = defaultRoomServerUrl();
     syncMatchModeButtons();
     difficultyButtons.forEach((button) => {
       button.classList.toggle("active", button.dataset.difficulty === state.difficulty);
@@ -339,13 +383,18 @@
     assistButton.textContent = state.assist ? "辅助" : "硬核";
     soundButton.textContent = state.muted ? "静音" : "音效";
     onlinePanel.hidden = state.matchMode !== "online";
+    if (state.matchMode === "online") startRoomBrowser();
     updateHud();
   }
 
   function setMatchMode(matchMode, restart = false) {
     state.matchMode = matchMode;
     state.singlePlayer = matchMode === "solo";
-    if (matchMode !== "online" && online.pc) resetOnlineConnection();
+    if (matchMode === "online") startRoomBrowser();
+    if (matchMode !== "online" && (online.ws || online.roomChannel || online.role)) {
+      resetOnlineConnection();
+      closeRoomServer();
+    }
     onlinePanel.hidden = matchMode !== "online";
     saveSettings();
     updateHud();
@@ -362,6 +411,9 @@
     if (!keys.has(code)) {
       taps.add(code);
       inputBuffer.set(code, shotTuning.inputBuffer);
+      if (state.matchMode === "online" && online.role === "guest") {
+        online.pendingInputTaps.add(normalizeGuestControl(code));
+      }
     }
     keys.add(code);
   }
@@ -379,6 +431,11 @@
       const next = time - dt;
       if (next <= 0) inputBuffer.delete(code);
       else inputBuffer.set(code, next);
+    });
+    remoteInputBuffer.forEach((time, code) => {
+      const next = time - dt;
+      if (next <= 0) remoteInputBuffer.delete(code);
+      else remoteInputBuffer.set(code, next);
     });
   }
 
@@ -442,6 +499,7 @@
       targetScoreButtons.forEach((item) => item.classList.toggle("active", item === button));
       saveSettings();
       updateHud();
+      syncOnlineRoomSettings();
       if (state.running) resetMatch();
     });
   });
@@ -451,6 +509,7 @@
       styleButtons.forEach((item) => item.classList.toggle("active", item === button));
       saveSettings();
       updateHud();
+      syncOnlineRoomSettings();
       if (state.running) resetMatch();
     });
   });
@@ -481,154 +540,443 @@
     button.addEventListener("pointerleave", end);
   });
 
+  refreshRoomsButton.addEventListener("click", () => refreshOnlineRooms(true));
   createRoomButton.addEventListener("click", createOnlineRoom);
-  joinRoomButton.addEventListener("click", joinOnlineRoom);
-  acceptAnswerButton.addEventListener("click", acceptOnlineAnswer);
-  copySignalButton.addEventListener("click", copyLocalSignal);
   resetOnlineButton.addEventListener("click", resetOnlineConnection);
+  roomList.addEventListener("click", (event) => {
+    const row = event.target.closest("[data-room-code]");
+    if (!row || row.disabled) return;
+    joinOnlineRoom(row.dataset.roomCode);
+  });
+  roomServerInput.addEventListener("change", () => {
+    const value = roomServerInput.value.trim();
+    try {
+      localStorage.setItem(roomServerKey, value);
+    } catch {
+      // Server address persistence is optional.
+    }
+    if (state.matchMode === "online") {
+      closeRoomServer();
+      refreshOnlineRooms(true);
+    }
+  });
 
   function setOnlineStatus(text) {
     onlineStatus.textContent = text;
     updateHud();
   }
 
-  function onlineConfig() {
-    return { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  function normalizeRoomCode(value) {
+    return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
   }
 
-  function makeSignal(description) {
-    return btoa(unescape(encodeURIComponent(JSON.stringify(description))));
+  function randomRoomCode() {
+    return Math.random().toString(36).slice(2, 6).toUpperCase();
   }
 
-  function readSignal(value) {
-    return JSON.parse(decodeURIComponent(escape(atob(value.trim()))));
+  function makeRoomChannelName(code) {
+    return `stick-badminton-room-${code}`;
   }
 
-  async function waitForIceGathering(pc) {
-    if (pc.iceGatheringState === "complete") return;
-    await new Promise((resolve) => {
-      const done = () => {
-        if (pc.iceGatheringState === "complete") {
-          pc.removeEventListener("icegatheringstatechange", done);
-          resolve();
-        }
-      };
-      pc.addEventListener("icegatheringstatechange", done);
-      setTimeout(resolve, 2400);
+  function defaultRoomServerUrl() {
+    return defaultRoomServer;
+  }
+
+  function roomServerUrl() {
+    return roomServerInput.value.trim();
+  }
+
+  function createRoomRecord(code, hostId = online.clientId) {
+    return {
+      code,
+      hostId,
+      title: `房间 ${code}`,
+      players: online.connected ? 2 : 1,
+      capacity: 2,
+      status: online.connected ? "playing" : "waiting",
+      targetScore: state.targetScore,
+      playStyle: state.playStyle,
+      updatedAt: Date.now(),
+    };
+  }
+
+  function roomStatusText(room) {
+    if (room.status === "playing") return "比赛中";
+    if (room.status === "full") return "已满";
+    return "等待中";
+  }
+
+  function renderRoomList() {
+    const rooms = [...online.rooms].sort((a, b) => {
+      const aOpen = a.status === "waiting" ? 0 : 1;
+      const bOpen = b.status === "waiting" ? 0 : 1;
+      return aOpen - bOpen || (b.updatedAt || 0) - (a.updatedAt || 0);
+    });
+    roomList.querySelectorAll(".room-row").forEach((item) => item.remove());
+    roomEmpty.hidden = rooms.length > 0;
+    roomEmpty.textContent = online.transport === "websocket" ? "暂无可加入房间。" : "暂无本机房间，可创建后用同源多标签加入。";
+    rooms.forEach((room) => {
+      const row = document.createElement("button");
+      const locked = room.status !== "waiting" || room.players >= room.capacity || room.hostId === online.clientId;
+      const title = document.createElement("strong");
+      const action = document.createElement("span");
+      const detail = document.createElement("span");
+      row.className = "room-row";
+      row.type = "button";
+      row.disabled = locked;
+      row.dataset.roomCode = room.code;
+      action.className = "room-action";
+      title.textContent = room.title || `房间 ${room.code}`;
+      action.textContent = locked ? roomStatusText(room) : "加入";
+      detail.textContent = `${roomStatusText(room)} · ${room.players || 1}/${room.capacity || 2} · ${room.targetScore || state.targetScore}分制 · ${playStyles[room.playStyle]?.label || playStyles.standard.label}`;
+      row.append(title, action, detail);
+      roomList.append(row);
     });
   }
 
-  function preparePeer(role) {
-    if (!online.supported) {
-      setOnlineStatus("当前浏览器不支持 WebRTC 数据通道。");
-      return null;
-    }
-    resetOnlineConnection(false);
-    online.role = role;
-    online.pc = new RTCPeerConnection(onlineConfig());
-    online.pc.onconnectionstatechange = () => {
-      const status = online.pc.connectionState;
-      online.connected = status === "connected";
-      if (online.connected) setOnlineStatus(role === "host" ? "已连接 | 你控制蓝队" : "已连接 | 你控制红队");
-      else if (["failed", "disconnected", "closed"].includes(status)) setOnlineStatus(`连接状态：${status}`);
-    };
-    return online.pc;
-  }
-
-  function attachOnlineChannel(channel) {
-    online.channel = channel;
-    channel.onopen = () => {
-      online.connected = true;
-      setOnlineStatus(online.role === "host" ? "已连接 | 你控制蓝队" : "已连接 | 你控制红队");
-      sendOnlineInput(true);
-      if (online.role === "host") sendOnlineSnapshot(true);
-    };
-    channel.onclose = () => {
-      online.connected = false;
-      setOnlineStatus("连接已断开。");
-    };
-    channel.onmessage = (event) => {
-      const packet = JSON.parse(event.data);
-      if (packet.type === "input" && online.role === "host") {
-        remoteKeys.clear();
-        packet.keys.forEach((code) => remoteKeys.add(code));
-      }
-      if (packet.type === "snapshot" && online.role === "guest") {
-        applyOnlineSnapshot(packet);
-      }
-      if (packet.type === "start" && online.role === "guest") {
-        startScreen.classList.add("hidden");
-        gameStage.classList.remove("hidden");
-        overlay.classList.add("hidden");
-      }
-    };
-  }
-
-  async function createOnlineRoom() {
-    setMatchMode("online", false);
-    const pc = preparePeer("host");
-    if (!pc) return;
-    attachOnlineChannel(pc.createDataChannel("badminton"));
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await waitForIceGathering(pc);
-    localSignal.value = makeSignal(pc.localDescription);
-    setOnlineStatus("房间已创建 | 把本机码发给对手，再粘贴对手返回码并点完成连接。");
-  }
-
-  async function joinOnlineRoom() {
-    setMatchMode("online", false);
-    const pc = preparePeer("guest");
-    if (!pc) return;
-    pc.ondatachannel = (event) => attachOnlineChannel(event.channel);
+  function readLocalRooms() {
     try {
-      await pc.setRemoteDescription(readSignal(remoteSignal.value));
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      await waitForIceGathering(pc);
-      localSignal.value = makeSignal(pc.localDescription);
-      setOnlineStatus("已生成对手码 | 发回给房主等待连接。");
+      const raw = localStorage.getItem(roomStorageKey);
+      const rooms = raw ? JSON.parse(raw) : [];
+      const now = Date.now();
+      const fresh = rooms.filter((room) => now - (room.updatedAt || 0) < 10000);
+      if (fresh.length !== rooms.length) localStorage.setItem(roomStorageKey, JSON.stringify(fresh));
+      return fresh;
     } catch {
-      setOnlineStatus("对手码无法识别，请确认完整复制。");
+      return [];
     }
   }
 
-  async function acceptOnlineAnswer() {
-    if (!online.pc || online.role !== "host") {
-      setOnlineStatus("请先创建房间。");
+  function writeLocalRooms(rooms) {
+    try {
+      localStorage.setItem(roomStorageKey, JSON.stringify(rooms));
+    } catch {
+      // Local fallback simply becomes roomless when storage is unavailable.
+    }
+  }
+
+  function upsertLocalRoom(room) {
+    const rooms = readLocalRooms().filter((item) => item.code !== room.code);
+    rooms.push({ ...room, updatedAt: Date.now() });
+    writeLocalRooms(rooms);
+    notifyLocalLobby();
+  }
+
+  function removeLocalRoom(code) {
+    writeLocalRooms(readLocalRooms().filter((room) => room.code !== code));
+    notifyLocalLobby();
+  }
+
+  function notifyLocalLobby() {
+    if (online.lobbyChannel) online.lobbyChannel.postMessage({ type: "rooms-changed" });
+  }
+
+  function ensureLobbyChannel() {
+    if (!online.localSupported || online.lobbyChannel) return;
+    online.lobbyChannel = new BroadcastChannel(roomLobbyChannelName);
+    online.lobbyChannel.onmessage = () => {
+      if (state.matchMode === "online" && online.transport !== "websocket") refreshOnlineRooms(false);
+    };
+  }
+
+  function startOnlineTimers() {
+    if (!online.refreshTimer) online.refreshTimer = setInterval(() => refreshOnlineRooms(false), 2500);
+    if (!online.heartbeatTimer) online.heartbeatTimer = setInterval(sendRoomHeartbeat, 1800);
+  }
+
+  function startRoomBrowser() {
+    ensureLobbyChannel();
+    roomServerInput.value = roomServerInput.value || defaultRoomServerUrl();
+    startOnlineTimers();
+    refreshOnlineRooms(false);
+  }
+
+  function connectRoomServer() {
+    const url = roomServerUrl();
+    if (!url || !online.wsSupported) return false;
+    if (online.ws && online.serverUrl !== url) closeRoomServer();
+    if (online.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(online.ws.readyState)) return true;
+    online.serverUrl = url;
+    try {
+      online.ws = new WebSocket(url);
+    } catch {
+      online.ws = null;
+      online.serverUrl = "";
+      return false;
+    }
+    online.ws.onopen = () => {
+      online.transport = "websocket";
+      sendServerMessage({ type: "hello", clientId: online.clientId });
+      sendServerMessage({ type: "list-rooms" });
+      setOnlineStatus("房间服务已连接，可以创建或加入房间。");
+    };
+    online.ws.onmessage = (event) => {
+      try {
+        receiveServerMessage(JSON.parse(event.data));
+      } catch {
+        setOnlineStatus("收到无法识别的房间服务消息。");
+      }
+    };
+    online.ws.onerror = () => {
+      if (online.transport !== "websocket") setOnlineStatus("房间服务不可用，已切到本机房间列表。");
+    };
+    online.ws.onclose = () => {
+      if (online.transport === "websocket") setOnlineStatus("房间服务断开，已切到本机房间列表。");
+      online.ws = null;
+      online.serverUrl = "";
+      online.transport = "local";
+      if (!online.role) {
+        online.rooms = readLocalRooms();
+        renderRoomList();
+      }
+    };
+    return true;
+  }
+
+  function closeRoomServer() {
+    if (!online.ws) return;
+    online.ws.onclose = null;
+    online.ws.close();
+    online.ws = null;
+    online.serverUrl = "";
+    online.transport = "local";
+  }
+
+  function sendServerMessage(packet) {
+    if (!online.ws || online.ws.readyState !== WebSocket.OPEN) return false;
+    online.ws.send(JSON.stringify({ clientId: online.clientId, ...packet }));
+    return true;
+  }
+
+  function receiveServerMessage(packet) {
+    if (packet.type === "rooms") {
+      online.rooms = packet.rooms || [];
+      renderRoomList();
       return;
     }
-    try {
-      await online.pc.setRemoteDescription(readSignal(remoteSignal.value));
-      setOnlineStatus("正在连接对手...");
-    } catch {
-      setOnlineStatus("对手码无法识别，请确认完整复制。");
+    if (packet.type === "room-created") {
+      enterOnlineRoom("host", packet.room.code, "websocket");
+      online.rooms = packet.rooms || online.rooms;
+      renderRoomList();
+      setOnlineStatus(`房间 ${online.roomCode} 已创建 | 等待对手加入。`);
+      return;
+    }
+    if (packet.type === "room-joined") {
+      enterOnlineRoom("guest", packet.room.code, "websocket");
+      online.peerId = packet.hostId || packet.room.hostId || "";
+      online.connected = true;
+      online.rooms = packet.rooms || online.rooms;
+      renderRoomList();
+      setOnlineStatus(`已加入房间 ${online.roomCode} | 你控制红队。`);
+      sendOnlineInput(true);
+      return;
+    }
+    if (packet.type === "peer-joined" && online.role === "host") {
+      online.peerId = packet.peerId || "";
+      online.connected = true;
+      setOnlineStatus(`房间 ${online.roomCode} 已连接 | 你控制蓝队。`);
+      sendOnlineSnapshot(true);
+      return;
+    }
+    if (packet.type === "peer-left") {
+      online.connected = false;
+      remoteKeys.clear();
+      remoteTaps.clear();
+      remoteInputBuffer.clear();
+      setOnlineStatus(`房间 ${online.roomCode} 对手已离开。`);
+      return;
+    }
+    if (packet.type === "relay") {
+      receiveOnlinePacket({ ...packet.payload, senderId: packet.senderId });
+      return;
+    }
+    if (packet.type === "error") {
+      setOnlineStatus(packet.message || "房间服务返回错误。");
     }
   }
 
-  async function copyLocalSignal() {
-    if (!localSignal.value) return;
-    try {
-      await navigator.clipboard.writeText(localSignal.value);
-      setOnlineStatus("本机码已复制。");
-    } catch {
-      localSignal.select();
-      setOnlineStatus("已选中本机码，请手动复制。");
+  function refreshOnlineRooms(forceServer) {
+    if (state.matchMode !== "online") return;
+    if (forceServer || !online.ws) connectRoomServer();
+    if (sendServerMessage({ type: "list-rooms" })) return;
+    online.transport = "local";
+    online.rooms = readLocalRooms();
+    renderRoomList();
+    if (!online.role) setOnlineStatus("本机房间列表 | 开启 room-server.js 后可跨设备加入。");
+  }
+
+  function createRoomEnvelope(packet) {
+    return {
+      senderId: online.clientId,
+      targetId: online.peerId || packet.targetId || "",
+      packet,
+    };
+  }
+
+  function sendRoomPacket(packet) {
+    if (!online.roomChannel) return false;
+    online.roomChannel.postMessage(createRoomEnvelope(packet));
+    return true;
+  }
+
+  function sendOnlineMessage(packet) {
+    let sent = false;
+    if (online.transport === "websocket" && online.roomCode) {
+      sent = sendServerMessage({ type: "relay", roomCode: online.roomCode, payload: packet }) || sent;
     }
+    if (sendRoomPacket(packet)) sent = true;
+    return sent;
+  }
+
+  function receiveOnlinePacket(packet) {
+    if (packet.type === "hello" && online.role === "host") {
+      online.peerId = packet.senderId;
+      online.connected = true;
+      sendOnlineMessage({ type: "welcome", targetId: online.peerId, hostId: online.clientId });
+      if (online.transport === "local") upsertLocalRoom(createRoomRecord(online.roomCode));
+      setOnlineStatus(`房间 ${online.roomCode} 已连接 | 你控制蓝队`);
+      sendOnlineSnapshot(true);
+      return;
+    }
+    if (packet.type === "welcome" && online.role === "guest") {
+      online.peerId = packet.hostId || packet.senderId;
+      online.connected = true;
+      setOnlineStatus(`已加入房间 ${online.roomCode} | 你控制红队`);
+      sendOnlineInput(true);
+      return;
+    }
+    if (packet.type === "input" && online.role === "host") {
+      remoteKeys.clear();
+      remoteTaps.clear();
+      (packet.keys || []).forEach((code) => remoteKeys.add(code));
+      (packet.taps || []).forEach((code) => {
+        remoteTaps.add(code);
+        remoteInputBuffer.set(code, shotTuning.inputBuffer);
+      });
+    }
+    if (packet.type === "snapshot" && online.role === "guest") {
+      applyOnlineSnapshot(packet);
+    }
+    if (packet.type === "start" && online.role === "guest") {
+      startScreen.classList.add("hidden");
+      gameStage.classList.remove("hidden");
+      overlay.classList.add("hidden");
+    }
+  }
+
+  function enterOnlineRoom(role, code, transport) {
+    closeRoomChannel();
+    state.matchMode = "online";
+    online.transport = transport;
+    online.role = role;
+    online.roomCode = normalizeRoomCode(code);
+    online.peerId = "";
+    online.connected = false;
+    online.lastSnapshot = 0;
+    online.lastSnapshotReceived = 0;
+    online.lastInputSent = 0;
+    online.pendingInputTaps.clear();
+    remoteKeys.clear();
+    remoteTaps.clear();
+    remoteInputBuffer.clear();
+    if (transport === "local" && online.localSupported) {
+      online.roomChannel = new BroadcastChannel(makeRoomChannelName(online.roomCode));
+      online.roomChannel.onmessage = (event) => {
+        const envelope = event.data || {};
+        const packet = envelope.packet;
+        if (!packet || envelope.senderId === online.clientId) return;
+        if (envelope.targetId && envelope.targetId !== online.clientId) return;
+        receiveOnlinePacket({ ...packet, senderId: envelope.senderId });
+      };
+    }
+  }
+
+  function closeRoomChannel() {
+    if (online.roomChannel) online.roomChannel.close();
+    online.roomChannel = null;
+  }
+
+  function createLocalRoom() {
+    if (!online.localSupported) {
+      setOnlineStatus("当前浏览器不支持本机房间列表，请启动 WebSocket 房间服务。");
+      return;
+    }
+    const code = randomRoomCode();
+    enterOnlineRoom("host", code, "local");
+    upsertLocalRoom(createRoomRecord(code));
+    renderRoomList();
+    setOnlineStatus(`房间 ${online.roomCode} 已创建 | 等待本机同源标签页加入。`);
+  }
+
+  function createOnlineRoom() {
+    setMatchMode("online", false);
+    if (sendServerMessage({
+      type: "create-room",
+      targetScore: state.targetScore,
+      playStyle: state.playStyle,
+    })) {
+      setOnlineStatus("正在创建线上房间...");
+      return;
+    }
+    createLocalRoom();
+  }
+
+  function joinOnlineRoom(code) {
+    setMatchMode("online", false);
+    const roomCode = normalizeRoomCode(code);
+    if (!roomCode) return;
+    if (sendServerMessage({ type: "join-room", roomCode })) {
+      setOnlineStatus(`正在加入房间 ${roomCode}...`);
+      return;
+    }
+    const room = readLocalRooms().find((item) => item.code === roomCode);
+    if (!room || room.status !== "waiting") {
+      setOnlineStatus("这个房间已不可加入。");
+      refreshOnlineRooms(false);
+      return;
+    }
+    enterOnlineRoom("guest", roomCode, "local");
+    setOnlineStatus(`正在加入房间 ${online.roomCode}...`);
+    sendRoomPacket({ type: "hello", senderId: online.clientId });
+  }
+
+  function sendRoomHeartbeat() {
+    if (state.matchMode !== "online" || !online.role || !online.roomCode) return;
+    if (online.transport === "websocket") {
+      sendServerMessage({
+        type: "room-heartbeat",
+        roomCode: online.roomCode,
+        status: online.connected ? "playing" : "waiting",
+        targetScore: state.targetScore,
+        playStyle: state.playStyle,
+      });
+      return;
+    }
+    if (online.role === "host") {
+      upsertLocalRoom(createRoomRecord(online.roomCode));
+    }
+  }
+
+  function syncOnlineRoomSettings() {
+    if (state.matchMode !== "online" || online.role !== "host" || !online.roomCode) return;
+    sendRoomHeartbeat();
+    sendOnlineSnapshot(true);
   }
 
   function resetOnlineConnection(clearSignals = true) {
-    if (online.channel) online.channel.close();
-    if (online.pc) online.pc.close();
-    online.pc = null;
-    online.channel = null;
+    if (online.role === "host" && online.transport === "local" && online.roomCode) removeLocalRoom(online.roomCode);
+    if (online.roomCode) sendServerMessage({ type: "leave-room", roomCode: online.roomCode });
+    closeRoomChannel();
     online.role = null;
     online.connected = false;
+    online.roomCode = "";
+    online.peerId = "";
     remoteKeys.clear();
+    remoteTaps.clear();
+    remoteInputBuffer.clear();
     if (clearSignals) {
-      localSignal.value = "";
-      remoteSignal.value = "";
-      setOnlineStatus("未连接 | 房主控制蓝队，加入方控制红队");
+      setOnlineStatus("未进入房间 | 可刷新、创建或加入房间。");
+      refreshOnlineRooms(false);
     }
   }
 
@@ -637,28 +985,85 @@
     return keys;
   }
 
+  function remoteKeyAliases(code) {
+    return {
+      ArrowLeft: ["ArrowLeft", "a"],
+      ArrowRight: ["ArrowRight", "d"],
+      ArrowUp: ["ArrowUp", "w"],
+      ArrowDown: ["ArrowDown", "s"],
+      1: ["1", "j"],
+      2: ["2", "k"],
+    }[code] || [code];
+  }
+
+  function remoteKeyHas(code) {
+    return remoteKeyAliases(code).some((alias) => remoteKeys.has(alias));
+  }
+
+  function remoteTapHas(code) {
+    return remoteKeyAliases(code).some((alias) => remoteTaps.has(alias));
+  }
+
+  function remoteKeyBuffered(code) {
+    return remoteKeyAliases(code).some((alias) => (remoteInputBuffer.get(alias) || 0) > 0);
+  }
+
   function keyHeld(side, code) {
-    return keySetFor(side).has(code);
+    if (keySetFor(side) === remoteKeys) return remoteKeyHas(code);
+    return keys.has(code);
   }
 
   function keyBuffered(side, code) {
-    if (keySetFor(side) !== keys) return remoteKeys.has(code);
+    if (keySetFor(side) !== keys) return remoteKeyHas(code) || remoteTapHas(code) || remoteKeyBuffered(code);
     return buffered(code);
   }
 
+  function normalizeGuestControl(code) {
+    return {
+      a: "ArrowLeft",
+      ArrowLeft: "ArrowLeft",
+      d: "ArrowRight",
+      ArrowRight: "ArrowRight",
+      w: "ArrowUp",
+      ArrowUp: "ArrowUp",
+      " ": "ArrowUp",
+      s: "ArrowDown",
+      ArrowDown: "ArrowDown",
+      j: "1",
+      1: "1",
+      k: "2",
+      2: "2",
+    }[code] || code;
+  }
+
+  function normalizedGuestControls(source) {
+    return [...new Set([...source].map(normalizeGuestControl))];
+  }
+
+  function cleanTrail(trail) {
+    if (!Array.isArray(trail)) return [];
+    return trail
+      .filter((point) => point && Number.isFinite(point.x) && Number.isFinite(point.y))
+      .slice(0, 12)
+      .map((point) => ({ x: point.x, y: point.y }));
+  }
+
   function sendOnlineInput(force = false) {
-    if (state.matchMode !== "online" || online.role !== "guest" || !online.channel) return;
-    if (online.channel.readyState !== "open") return;
+    if (state.matchMode !== "online" || online.role !== "guest") return;
     const now = performance.now();
-    if (!force && now - online.lastInputSent < 26) return;
+    if (!force && now - online.lastInputSent < onlineTuning.inputInterval) return;
     online.lastInputSent = now;
-    online.channel.send(JSON.stringify({ type: "input", keys: [...keys] }));
+    const sent = sendOnlineMessage({
+      type: "input",
+      keys: normalizedGuestControls(keys),
+      taps: normalizedGuestControls(new Set([...taps, ...online.pendingInputTaps])),
+    });
+    if (sent) online.pendingInputTaps.clear();
   }
 
   function sendOnlinePacket(packet) {
-    if (state.matchMode !== "online" || online.role !== "host" || !online.channel) return;
-    if (online.channel.readyState !== "open") return;
-    online.channel.send(JSON.stringify(packet));
+    if (state.matchMode !== "online" || online.role !== "host") return;
+    sendOnlineMessage(packet);
   }
 
   function packPlayer(player) {
@@ -677,6 +1082,7 @@
       lastHit: player.lastHit,
       aiTargetX: player.aiTargetX,
       aiShot: player.aiShot,
+      aiPlan: player.aiPlan,
     };
   }
 
@@ -691,14 +1097,14 @@
       served: bird.served,
       server: bird.server,
       lastTouched: bird.lastTouched,
-      trail: bird.trail.slice(0, 12),
+      trail: cleanTrail(bird.trail),
     };
   }
 
   function sendOnlineSnapshot(force = false) {
     if (state.matchMode !== "online" || online.role !== "host") return;
     const now = performance.now();
-    if (!force && now - online.lastSnapshot < 50) return;
+    if (!force && now - online.lastSnapshot < onlineTuning.snapshotInterval) return;
     online.lastSnapshot = now;
     sendOnlinePacket({
       type: "snapshot",
@@ -711,6 +1117,9 @@
       serveSide: state.serveSide,
       score: state.score,
       shake: state.shake,
+      rallyHits: state.rallyHits,
+      bestRally: state.bestRally,
+      rallyHeat: state.rallyHeat,
       assist: state.assist,
       message: state.message,
       messageTimer: state.messageTimer,
@@ -724,6 +1133,7 @@
   }
 
   function applyOnlineSnapshot(packet) {
+    online.lastSnapshotReceived = performance.now();
     state.running = packet.running;
     state.paused = packet.paused;
     state.winner = packet.winner;
@@ -734,6 +1144,9 @@
     state.score.left = packet.score.left;
     state.score.right = packet.score.right;
     state.shake = packet.shake;
+    state.rallyHits = packet.rallyHits || 0;
+    state.bestRally = packet.bestRally || 0;
+    state.rallyHeat = packet.rallyHeat || 0;
     state.assist = packet.assist;
     state.message = packet.message;
     state.messageTimer = packet.messageTimer;
@@ -743,6 +1156,7 @@
     Object.assign(left, packet.left);
     Object.assign(right, packet.right);
     Object.assign(bird, packet.bird);
+    bird.trail = cleanTrail(packet.bird?.trail);
     updateHud();
     if (state.running) {
       startScreen.classList.add("hidden");
@@ -797,7 +1211,7 @@
       return Number(keySet.has("d")) - Number(keySet.has("a"));
     }
     if (!controlledByAi(player)) {
-      return Number(keySet.has("ArrowRight")) - Number(keySet.has("ArrowLeft"));
+      return Number(keyHeld(player.side, "ArrowRight")) - Number(keyHeld(player.side, "ArrowLeft"));
     }
     return aiMoveAxis(player) * difficulty[state.difficulty].aiSpeed;
   }
@@ -816,6 +1230,22 @@
     player.aiThink -= dt;
     if (player.aiThink > 0) return;
 
+    if (!bird.served && bird.server === "right") {
+      const roll = Math.random();
+      if (state.difficulty === "hard" && roll < 0.32) {
+        player.aiShot = "drop";
+        player.aiPlan = "serve-short";
+      } else if (state.difficulty !== "easy" && roll > 0.76) {
+        player.aiShot = "smash";
+        player.aiPlan = "serve-fast";
+      } else {
+        player.aiShot = "clear";
+        player.aiPlan = "serve-long";
+      }
+      player.aiThink = 0.28;
+      return;
+    }
+
     const landingX = predictLandingX();
     const missWave = Math.sin(performance.now() / 530) * profile.aiError;
     const panic = bird.x > netX && bird.y > ground - 92 ? profile.aiError * 0.35 : 0;
@@ -824,14 +1254,27 @@
 
     const distance = Math.abs(bird.x - player.x);
     const canAttack = bird.x > netX && bird.y < 268 && distance < 92;
-    const canDrop = bird.x > netX && bird.y < 340 && player.x < netX + 190;
+    const canDrop = bird.x > netX && bird.y < 352 && player.x < netX + 205;
+    const playerTooDeep = left.x < netX - 235;
+    const playerTooClose = left.x > netX - 145;
+    const underPressure = bird.x > netX && bird.y > ground - 120;
+    const longRally = state.rallyHits >= 7;
     const roll = Math.random();
-    if (canAttack && state.difficulty !== "easy" && roll > (state.difficulty === "hard" ? 0.22 : 0.56)) {
+    if (underPressure) {
+      player.aiShot = state.difficulty === "easy" && roll < 0.42 ? "drive" : "clear";
+      player.aiPlan = "escape";
+    } else if (canAttack && state.difficulty !== "easy" && roll > (state.difficulty === "hard" ? 0.18 : 0.52)) {
       player.aiShot = "smash";
-    } else if (canDrop && roll < (state.difficulty === "hard" ? 0.34 : 0.18)) {
+      player.aiPlan = "attack";
+    } else if (canDrop && (playerTooDeep || longRally) && roll < (state.difficulty === "hard" ? 0.52 : 0.28)) {
       player.aiShot = "drop";
+      player.aiPlan = "pull-net";
+    } else if (playerTooClose && roll < (state.difficulty === "hard" ? 0.58 : 0.32)) {
+      player.aiShot = "clear";
+      player.aiPlan = "push-back";
     } else {
       player.aiShot = landingX > W - 205 ? "clear" : "drive";
+      player.aiPlan = "neutral";
     }
     player.aiThink = profile.aiReact + (state.difficulty === "easy" ? 0.16 : state.difficulty === "normal" ? 0.08 : 0.035);
   }
@@ -863,6 +1306,10 @@
   function wantsSmash(player) {
     if (player.side === "left") return keyBuffered(player.side, "k");
     if (!controlledByAi(player)) return keyBuffered(player.side, "2");
+    if (!bird.served && bird.server === "right") {
+      if (state.difficulty === "easy") return false;
+      return state.serveDelay <= 0 && player.aiShot === "smash";
+    }
     return player.aiShot === "smash" && bird.x > netX && bird.y < 280 && distanceToRacket(player) < 78;
   }
 
@@ -960,19 +1407,40 @@
     return player.aiShot === "drop";
   }
 
+  function registerRallyHit(player, quality, shotType) {
+    state.rallyHits += 1;
+    state.bestRally = Math.max(state.bestRally, state.rallyHits);
+    state.rallyHeat = Math.min(1, state.rallyHeat + 0.09 + quality * 0.05);
+
+    const milestone = state.rallyHits === 5 || state.rallyHits === 9 || state.rallyHits === 14;
+    if (!milestone) return false;
+
+    const label = state.rallyHits >= 14 ? "超长拉锯!" : state.rallyHits >= 9 ? "精彩多拍!" : "进入相持";
+    state.message = shotType === "smash" && quality > 0.72 ? "强攻续上!" : label;
+    state.messageTimer = state.rallyHits >= 14 ? 0.76 : 0.58;
+    state.shake = Math.max(state.shake, state.rallyHits >= 14 ? 7 : 4);
+    burst(bird.x, bird.y, player.color, state.rallyHits >= 14 ? 14 : 9, "streak", player.facing);
+    blip(state.rallyHits >= 14 ? 680 : 610, 0.055, 0.024);
+    return true;
+  }
+
   function serve(player) {
     if (bird.served || bird.server !== player.side) return;
-    const power = player.smash > 0 ? 1.12 : 0.92;
+    const dropServe = wantsDropShot(player);
+    const power = player.smash > 0 ? 1.12 : dropServe ? 0.66 : 0.92;
+    const fastServe = player.smash > 0 && !dropServe;
     bird.served = true;
     bird.lastTouched = player.side;
     bird.x = player.x + player.facing * 58;
-    bird.y = player.y - 82;
-    bird.vx = player.facing * 420 * power;
-    bird.vy = -430 * power;
-    bird.spin = player.facing * 7;
-    state.shake = 4;
-    burst(bird.x, bird.y, "#f7f7ef", 7);
-    blip(360, 0.05, 0.025);
+    bird.y = player.y - (dropServe ? 72 : 96);
+    bird.vx = player.facing * (dropServe ? 300 : fastServe ? 520 : 500) * power;
+    bird.vy = dropServe ? -235 : fastServe ? -430 : -620 * power;
+    bird.spin = player.facing * (dropServe ? 10 : fastServe ? 12 : 7);
+    state.shake = dropServe ? 3 : fastServe ? 5 : 4;
+    state.message = dropServe ? "偷发网前" : fastServe ? "快速长发" : "高远发球";
+    state.messageTimer = 0.42;
+    burst(bird.x, bird.y, dropServe ? "#d9fff0" : "#f7f7ef", dropServe ? 6 : 7);
+    blip(dropServe ? 420 : fastServe ? 300 : 360, 0.05, 0.025);
   }
 
   function hitBird(player) {
@@ -991,11 +1459,19 @@
     const smash = player.smash > 0 || (!player.onGround && bird.y < ground - 160 && quality > 0.42);
     const dropShot = wantsDropShot(player) && !smash;
     const drive = !smash && !dropShot && contact.front > 0.42 && quality > 0.55;
-    const targetX = opponentTargetX(player, dropShot ? "drop" : smash ? "smash" : drive ? "drive" : "clear", quality, contact);
+    const shotType = dropShot ? "drop" : smash ? "smash" : drive ? "drive" : "clear";
+    const targetX = opponentTargetX(player, shotType, quality, contact);
     const dx = targetX - bird.x;
+    const heatBonus = state.rallyHeat * 0.08;
     const lift = smash ? 108 - quality * 80 : dropShot ? 230 + (1 - quality) * 130 : drive ? 360 : 515 + contact.height * 80;
     const pace =
-      smash ? 1.64 + quality * 0.34 : dropShot ? 0.64 + quality * 0.18 : drive ? 1.42 : 1.08 + quality * 0.24;
+      smash
+        ? 1.64 + quality * 0.34 + heatBonus
+        : dropShot
+          ? 0.64 + quality * 0.18
+          : drive
+            ? 1.42 + heatBonus * 0.65
+            : 1.08 + quality * 0.24;
     const horizontal = clamp(dx * pace + contact.front * (smash ? 130 : 72), -820, 820);
 
     bird.vx = horizontal;
@@ -1013,8 +1489,11 @@
     const perfect = quality > 0.78;
     state.shake = smash ? 7 + quality * 4 : perfect ? 5 : 3;
     state.hitStop = smash ? 0.045 + quality * 0.025 : perfect ? 0.035 : 0;
-    state.message = smash ? (perfect ? "完美扣杀!" : "扣杀!") : dropShot ? (perfect ? "贴网小球" : "网前小球") : perfect ? "甜点击球" : "回击";
-    state.messageTimer = smash || perfect ? 0.48 : 0.3;
+    const milestone = registerRallyHit(player, quality, shotType);
+    if (!milestone) {
+      state.message = smash ? (perfect ? "完美扣杀!" : "扣杀!") : dropShot ? (perfect ? "贴网小球" : "网前小球") : perfect ? "甜点击球" : "回击";
+      state.messageTimer = smash || perfect ? 0.48 : state.rallyHeat > 0.6 ? 0.38 : 0.3;
+    }
     burst(bird.x, bird.y, smash || perfect ? "#f8d75a" : "#f7f7ef", smash ? 13 : perfect ? 11 : 8);
     if (smash || perfect) burst(bird.x, bird.y, "rgba(248, 215, 90, 0.88)", smash ? 9 : 5, "streak", player.facing);
     blip(smash ? 180 : perfect ? 520 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : perfect ? 0.034 : 0.026);
@@ -1055,7 +1534,7 @@
     }
 
     bird.trail.unshift({ x: bird.x, y: bird.y });
-    bird.trail.length = 12;
+    bird.trail = cleanTrail(bird.trail);
 
     const speed = Math.hypot(bird.vx, bird.vy);
     const drag = 1 - clamp(0.58 + speed / 2400, 0.58, 0.86) * dt;
@@ -1151,6 +1630,7 @@
     updateParticles(dt);
     updateInputBuffer(dt);
     if (isOnlineGuest()) {
+      updateOnlineGuestPrediction(dt);
       sendOnlineInput();
       return;
     }
@@ -1196,6 +1676,118 @@
     sendOnlineSnapshot();
   }
 
+  function updateOnlineGuestPrediction(dt) {
+    if (!state.running || state.paused || state.winner) return;
+    if (state.rallyPause > 0) {
+      state.rallyPause = Math.max(0, state.rallyPause - dt);
+      state.messageTimer = Math.max(0, state.messageTimer - dt);
+      return;
+    }
+    if (state.readyTimer > 0) {
+      state.readyTimer = Math.max(0, state.readyTimer - dt);
+      state.messageTimer = Math.max(0, state.messageTimer - dt);
+      return;
+    }
+
+    state.serveDelay = Math.max(0, state.serveDelay - dt);
+    state.messageTimer = Math.max(0, state.messageTimer - dt);
+    if (state.hitStop > 0) {
+      state.hitStop = Math.max(0, state.hitStop - dt);
+      state.shake = Math.max(0, state.shake - dt * 10);
+      return;
+    }
+
+    updateGuestLocalPlayer(right, dt);
+    left.swing = Math.max(0, left.swing - dt);
+    left.smash = Math.max(0, left.smash - dt);
+    left.recovery = Math.max(0, left.recovery - dt);
+    right.lastHit = Math.max(0, right.lastHit - dt);
+    hitBird(right);
+    if (bird.server === "right" || bird.served) updateBirdPreview(dt);
+    state.shake = Math.max(0, state.shake - dt * 18);
+  }
+
+  function updateGuestLocalPlayer(player, dt) {
+    const [minX, maxX] = sideBounds(player.side);
+    const axis = Number(keys.has("ArrowRight") || keys.has("d")) - Number(keys.has("ArrowLeft") || keys.has("a"));
+    const recovering = player.recovery > 0;
+    const maxSpeed = (player.onGround ? 360 : 270) * (recovering ? 0.62 : 1);
+    const accel = (player.onGround ? 2600 : 1180) * (recovering ? 0.55 : 1);
+    const friction = player.onGround ? 0.78 : 0.96;
+
+    player.vx += axis * accel * dt;
+    if (axis === 0) player.vx *= Math.pow(friction, dt * 60);
+    player.vx = clamp(player.vx, -maxSpeed, maxSpeed);
+    player.x = clamp(player.x + player.vx * dt, minX, maxX);
+    player.facing = axis || -1;
+
+    if ((buffered("ArrowUp") || buffered("w") || buffered(" ")) && player.onGround) {
+      player.vy = -655;
+      player.onGround = false;
+      burst(player.x, ground + 4, "rgba(220, 238, 224, 0.72)", 7, "dust");
+    }
+
+    player.vy += 1850 * dt;
+    player.y += player.vy * dt;
+    if (player.y >= ground) {
+      if (!player.onGround && player.vy > 240) burst(player.x, ground + 4, "rgba(220, 238, 224, 0.64)", 8, "dust");
+      player.y = ground;
+      player.vy = 0;
+      player.onGround = true;
+    }
+
+    if (buffered("1") || buffered("j")) player.swing = 0.22;
+    if (buffered("2") || buffered("k")) {
+      player.swing = 0.26;
+      player.smash = 0.2;
+    }
+
+    player.swing = Math.max(0, player.swing - dt);
+    player.smash = Math.max(0, player.smash - dt);
+    player.recovery = Math.max(0, player.recovery - dt);
+    player.charge = player.smash > 0 ? 1 : Math.max(0, player.charge - dt * 5);
+    player.foot += Math.abs(player.vx) * dt * 0.03;
+  }
+
+  function updateBirdPreview(dt) {
+    if (!bird.served) {
+      const server = bird.server === "left" ? left : right;
+      bird.x = server.x + server.facing * 58;
+      bird.y = server.y - 92 + Math.sin(performance.now() / 190) * 4;
+      bird.angle += dt * 2;
+      return;
+    }
+
+    bird.trail.unshift({ x: bird.x, y: bird.y });
+    bird.trail = cleanTrail(bird.trail);
+
+    const speed = Math.hypot(bird.vx, bird.vy);
+    const drag = 1 - clamp(0.58 + speed / 2400, 0.58, 0.86) * dt;
+    const style = playStyles[state.playStyle];
+    bird.vx *= drag;
+    bird.vy *= drag;
+    if (style.wind) bird.vx += Math.sin(performance.now() / 420) * style.wind * dt;
+    bird.vy += 865 * dt;
+    bird.x += bird.vx * dt;
+    bird.y += bird.vy * dt;
+    bird.angle += bird.spin * dt;
+    bird.spin *= Math.pow(0.95, dt * 60);
+
+    if (bird.x - bird.r < 42) {
+      bird.x = 42 + bird.r;
+      bird.vx = Math.abs(bird.vx) * style.wallBounce;
+    }
+    if (bird.x + bird.r > W - 42) {
+      bird.x = W - 42 - bird.r;
+      bird.vx = -Math.abs(bird.vx) * style.wallBounce;
+    }
+    if (bird.y + bird.r > ground + 6) {
+      bird.y = ground + 6 - bird.r;
+      bird.vx *= 0.92;
+      bird.vy = 0;
+    }
+  }
+
   function updateDemo(dt) {
     state.demoTime += dt;
     left.x = 184 + Math.sin(state.demoTime * 1.2) * 34;
@@ -1212,7 +1804,7 @@
     bird.vy = Math.cos(state.demoTime * 5.2 + 0.6) * 360;
     bird.angle += dt * 8;
     bird.trail.unshift({ x: bird.x, y: bird.y });
-    bird.trail.length = 12;
+    bird.trail = cleanTrail(bird.trail);
   }
 
   function updateParticles(dt) {
@@ -1460,10 +2052,12 @@
     const hipY = player.y - 38;
     const gait = Math.sin(player.foot) * 10;
     const racket = racketPoint(player);
+    const preparingDrop = wantsDropShot(player) && player.swing <= 0;
+    const preparingSmash = (player.smash > 0 || (controlledByAi(player) && player.aiShot === "smash")) && player.swing <= 0.08;
     const lean = clamp(player.vx / 520, -0.42, 0.42);
     const swingArc = Math.sin((player.swing / 0.26) * Math.PI);
     const headX = player.x + lean * 8;
-    const torsoX = player.x + player.facing * 4 + lean * 13;
+    const torsoX = player.x + player.facing * (preparingSmash ? 8 : preparingDrop ? -2 : 4) + lean * 13;
     const hipX = player.x - lean * 8;
 
     ctx.save();
@@ -1588,6 +2182,22 @@
       drawSmashSprite(racket.x + player.facing * 14, racket.y - 4, player.facing);
     }
 
+    if (preparingSmash || preparingDrop) {
+      ctx.globalAlpha = preparingSmash ? 0.72 : 0.5;
+      ctx.strokeStyle = preparingSmash ? "rgba(248, 215, 90, 0.92)" : "rgba(217, 255, 240, 0.82)";
+      ctx.lineWidth = preparingSmash ? 3 : 2;
+      ctx.beginPath();
+      if (preparingSmash) {
+        ctx.moveTo(racket.x - player.facing * 20, racket.y - 24);
+        ctx.lineTo(racket.x + player.facing * 12, racket.y - 38);
+      } else {
+        ctx.moveTo(racket.x - player.facing * 20, racket.y + 12);
+        ctx.lineTo(racket.x + player.facing * 28, racket.y + 16);
+      }
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
     ctx.restore();
   }
 
@@ -1614,9 +2224,10 @@
     ctx.fill();
     ctx.globalAlpha = 1;
     const speed = Math.hypot(bird.vx, bird.vy);
-    bird.trail.forEach((p, index) => {
-      const next = bird.trail[index + 1] || p;
-      ctx.globalAlpha = (1 - index / bird.trail.length) * clamp(speed / 720, 0.18, 0.52);
+    const trail = cleanTrail(bird.trail);
+    trail.forEach((p, index) => {
+      const next = trail[index + 1] || p;
+      ctx.globalAlpha = (1 - index / trail.length) * clamp(speed / 720, 0.18, 0.52);
       ctx.strokeStyle = index < 2 ? "#fff7c8" : "#ffffff";
       ctx.lineWidth = Math.max(1, 6 - index * 0.42);
       ctx.beginPath();
@@ -1743,6 +2354,22 @@
     ctx.restore();
   }
 
+  function drawRallyCounter() {
+    if (!state.running || !bird.served || state.rallyHits < 3) return;
+    ctx.save();
+    ctx.globalAlpha = clamp(0.42 + state.rallyHeat * 0.34, 0.42, 0.78);
+    ctx.fillStyle = "rgba(8, 13, 22, 0.58)";
+    roundedRect(netX - 56, 196, 112, 28, 6);
+    ctx.fill();
+    ctx.strokeStyle = state.rallyHits >= 9 ? "rgba(248, 215, 90, 0.56)" : "rgba(255, 255, 255, 0.18)";
+    ctx.stroke();
+    ctx.fillStyle = state.rallyHits >= 9 ? "#f8d75a" : "#d7e4ef";
+    ctx.font = "800 14px system-ui";
+    ctx.textAlign = "center";
+    ctx.fillText(`${state.rallyHits} 拍相持`, netX, 215);
+    ctx.restore();
+  }
+
   function drawReadyGo() {
     if (!state.running || state.readyTimer <= 0 || state.rallyPause > 0) return;
     const label = state.readyTimer > 0.26 ? "READY" : "GO";
@@ -1792,6 +2419,7 @@
     drawParticles();
     drawServeHint();
     drawFloatingMessage();
+    drawRallyCounter();
     drawReadyGo();
     drawDemoBadge();
     ctx.restore();
@@ -1805,6 +2433,7 @@
     sendOnlineSnapshot();
     render();
     taps.clear();
+    remoteTaps.clear();
     requestAnimationFrame(frame);
   }
 
