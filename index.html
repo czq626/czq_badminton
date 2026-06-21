@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>火柴人羽毛球</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="game-wrap" aria-label="火柴人羽毛球游戏">
+        <canvas id="game" width="960" height="540"></canvas>
+
+        <div class="hud">
+          <div class="score-block left">
+            <span class="name">蓝队</span>
+            <strong id="leftScore">0</strong>
+          </div>
+          <div class="center-panel">
+            <span id="modeLabel">单人模式</span>
+            <button id="modeButton" type="button" title="切换单双人">切换</button>
+            <button id="assistButton" type="button" title="落点辅助开关">辅助</button>
+            <button id="soundButton" type="button" title="音效开关">音效</button>
+            <button id="pauseButton" type="button" title="暂停/继续">暂停</button>
+            <button id="resetButton" type="button" title="重新开局">重开</button>
+          </div>
+          <div class="score-block right">
+            <span class="name">红队</span>
+            <strong id="rightScore">0</strong>
+          </div>
+        </div>
+
+        <div class="status-strip" id="statusStrip">7分制 | 蓝队发球 | 休闲 | 标准</div>
+
+        <div class="overlay" id="overlay">
+          <div class="panel">
+            <h1>火柴人羽毛球</h1>
+            <p id="overlayText">抢落点、跳扣杀，先到 7 分获胜。</p>
+            <div class="menu-row compact" aria-label="人数选择">
+              <button class="choice active" type="button" data-player-mode="single">单人</button>
+              <button class="choice" type="button" data-player-mode="double">双人</button>
+            </div>
+            <div class="menu-row" aria-label="难度选择">
+              <button class="choice active" type="button" data-difficulty="easy">休闲</button>
+              <button class="choice" type="button" data-difficulty="normal">普通</button>
+              <button class="choice" type="button" data-difficulty="hard">高手</button>
+            </div>
+            <div class="menu-row compact" aria-label="赛制选择">
+              <button class="choice active" type="button" data-target-score="7">7分</button>
+              <button class="choice" type="button" data-target-score="11">11分</button>
+            </div>
+            <div class="menu-row compact" aria-label="玩法选择">
+              <button class="choice active" type="button" data-style="standard">标准</button>
+              <button class="choice" type="button" data-style="fun">趣味</button>
+            </div>
+            <button id="startButton" type="button">开始游戏</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="touch-controls" aria-label="触屏操作">
+        <div class="touch-side">
+          <span>蓝队</span>
+          <div class="touch-pad">
+            <button type="button" data-hold="a">←</button>
+            <button type="button" data-tap="w">跳</button>
+            <button type="button" data-hold="d">→</button>
+          </div>
+          <div class="touch-pad actions">
+            <button type="button" data-tap="j">挥拍</button>
+            <button type="button" data-tap="k">扣杀</button>
+            <button type="button" data-hold="s">短球</button>
+          </div>
+        </div>
+        <div class="touch-side">
+          <span>红队</span>
+          <div class="touch-pad">
+            <button type="button" data-hold="ArrowLeft">←</button>
+            <button type="button" data-tap="ArrowUp">跳</button>
+            <button type="button" data-hold="ArrowRight">→</button>
+          </div>
+          <div class="touch-pad actions">
+            <button type="button" data-tap="1">挥拍</button>
+            <button type="button" data-tap="2">扣杀</button>
+            <button type="button" data-hold="ArrowDown">短球</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="controls">
+        <div>
+          <h2>蓝队</h2>
+          <p><kbd>A</kbd><kbd>D</kbd> 移动 <kbd>W</kbd> 跳跃 <kbd>J</kbd> 挥拍 <kbd>K</kbd> 扣杀/挑球 <kbd>S</kbd> 网前小球</p>
+        </div>
+        <div>
+          <h2>红队</h2>
+          <p><kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳跃 <kbd>1</kbd> 挥拍 <kbd>2</kbd> 扣杀/挑球 <kbd>↓</kbd> 网前小球</p>
+        </div>
+      </section>
+    </main>
+
+    <script src="./game.js"></script>
+  </body>
+</html>
