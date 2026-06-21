@@ -7,7 +7,9 @@
   --line: #f1f7e8;
   --blue: #35b8ff;
   --red: #ff5f69;
-  --panel: rgba(9, 16, 27, 0.78);
+  --gold: #f8d75a;
+  --panel: rgba(10, 18, 30, 0.82);
+  --panel-strong: rgba(7, 13, 23, 0.94);
 }
 
 * {
@@ -29,21 +31,41 @@ body {
   display: grid;
   place-items: center;
   padding: 18px;
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(180deg, #101925 0%, #0a1019 100%);
+  background-size:
+    12px 12px,
+    12px 12px,
+    auto;
 }
 
 button {
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.05));
   color: var(--ink);
   cursor: pointer;
   font: inherit;
   line-height: 1;
   padding: 9px 12px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 3px 0 rgba(0, 0, 0, 0.34);
+  transition:
+    background 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
 }
 
 button:hover {
-  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.32);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.1));
+}
+
+button:active {
+  transform: translateY(1px);
 }
 
 .shell {
@@ -53,10 +75,12 @@ button:hover {
 .game-wrap {
   position: relative;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
   background: #0f1824;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.34);
+  box-shadow:
+    0 22px 70px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
 canvas {
@@ -64,6 +88,8 @@ canvas {
   width: 100%;
   aspect-ratio: 16 / 9;
   background: var(--court);
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
 }
 
 .hud {
@@ -80,18 +106,36 @@ canvas {
 .score-block,
 .center-panel {
   min-height: 48px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 3px;
   background: var(--panel);
   backdrop-filter: blur(10px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 4px 0 rgba(0, 0, 0, 0.3);
 }
 
 .score-block {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
   width: min(160px, 100%);
   padding: 8px 12px;
+  overflow: hidden;
+}
+
+.score-block::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  background: var(--blue);
+}
+
+.score-block.right::before {
+  inset: 0 0 0 auto;
+  background: var(--red);
 }
 
 .score-block.right {
@@ -101,11 +145,13 @@ canvas {
 .score-block .name {
   color: var(--muted);
   font-size: 13px;
+  font-weight: 800;
 }
 
 .score-block strong {
   font-size: clamp(26px, 4vw, 38px);
   line-height: 1;
+  text-shadow: 0 2px 12px rgba(255, 255, 255, 0.16);
 }
 
 .center-panel {
@@ -118,8 +164,9 @@ canvas {
 
 .center-panel span {
   min-width: 72px;
-  color: var(--muted);
+  color: #d7e4ef;
   font-size: 13px;
+  font-weight: 800;
   text-align: center;
 }
 
@@ -129,9 +176,9 @@ canvas {
   top: 72px;
   transform: translateX(-50%);
   min-width: min(360px, calc(100% - 32px));
-  border: 1px solid rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 8px;
-  background: rgba(9, 16, 27, 0.62);
+  background: rgba(8, 13, 22, 0.66);
   color: #d7e4ef;
   font-size: 13px;
   font-weight: 700;
@@ -148,8 +195,9 @@ canvas {
   display: grid;
   place-items: center;
   background:
-    radial-gradient(circle at 50% 72%, rgba(42, 163, 124, 0.36), transparent 36%),
-    rgba(7, 10, 16, 0.72);
+    radial-gradient(circle at 42% 70%, rgba(53, 184, 255, 0.16), transparent 28%),
+    radial-gradient(circle at 58% 70%, rgba(255, 95, 105, 0.14), transparent 28%),
+    rgba(7, 10, 16, 0.58);
   transition:
     opacity 180ms ease,
     visibility 180ms ease;
@@ -163,18 +211,23 @@ canvas {
 
 .panel {
   width: min(380px, calc(100% - 32px));
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: 8px;
-  background: rgba(9, 15, 25, 0.88);
+  background:
+    linear-gradient(180deg, rgba(16, 25, 39, 0.96), rgba(7, 12, 21, 0.92));
   padding: 26px;
   text-align: center;
   backdrop-filter: blur(12px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    0 18px 50px rgba(0, 0, 0, 0.36);
 }
 
 .panel h1 {
   margin: 0 0 10px;
   font-size: clamp(30px, 6vw, 52px);
   letter-spacing: 0;
+  text-shadow: 0 3px 18px rgba(255, 255, 255, 0.15);
 }
 
 .panel p {
@@ -184,10 +237,13 @@ canvas {
 
 .panel > button {
   min-width: 128px;
-  background: #f8d75a;
-  border-color: #f8d75a;
+  background: linear-gradient(180deg, #ffe77a, var(--gold));
+  border-color: var(--gold);
   color: #151515;
   font-weight: 800;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 8px 20px rgba(248, 215, 90, 0.18);
 }
 
 .menu-row {
@@ -207,9 +263,12 @@ canvas {
 }
 
 .choice.active {
-  background: #35b8ff;
-  border-color: #35b8ff;
+  background: linear-gradient(180deg, #6ecaff, var(--blue));
+  border-color: var(--blue);
   color: #07131e;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.32),
+    0 8px 18px rgba(53, 184, 255, 0.16);
 }
 
 .touch-controls {
@@ -226,7 +285,7 @@ canvas {
 }
 
 .touch-side span {
-  color: var(--muted);
+  color: #d7e4ef;
   font-size: 12px;
   font-weight: 800;
 }
@@ -244,7 +303,7 @@ canvas {
 .touch-pad button {
   min-height: 48px;
   border-color: rgba(255, 255, 255, 0.18);
-  background: #202a3a;
+  background: linear-gradient(180deg, #273449, #182131);
   font-weight: 800;
 }
 
@@ -258,7 +317,7 @@ canvas {
 .controls div {
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 8px;
-  background: #18202e;
+  background: linear-gradient(180deg, rgba(27, 36, 52, 0.92), rgba(20, 27, 41, 0.92));
   padding: 14px 16px;
 }
 
@@ -321,6 +380,11 @@ kbd {
 
   .score-block {
     min-height: 42px;
+    padding-inline: 13px 10px;
+  }
+
+  .score-block.right {
+    padding-inline: 10px 13px;
   }
 
   .status-strip {
@@ -368,6 +432,14 @@ kbd {
   .touch-controls {
     display: grid;
     gap: 8px;
+  }
+
+  .touch-side {
+    gap: 6px;
+  }
+
+  .touch-pad {
+    gap: 7px;
   }
 
   .controls {
