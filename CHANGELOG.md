@@ -18,3 +18,5 @@
 - Improved AI shot planning with pressure escapes, net pulls, back-court pushes, and more varied serve choices.
 - Added short serves and fast long serves while keeping standard high serves available.
 - Kept saved online preferences from taking over the default start screen, so returning players land back on quick solo/local play.
+- Smoothed guest-side multiplayer snapshots with rally reset snapping, remote player extrapolation, and restored guest-side hit, net, and scoring sound feedback.
+- Tuned shot feel so high attacks become clearer downward smashes, low attacks fall back to drives, drop shots land tighter, and mobile swipe-down drop inputs no longer stick.

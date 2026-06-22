@@ -103,9 +103,19 @@
     peerId: "",
     refreshTimer: null,
     heartbeatTimer: null,
+    snapshotSeq: 0,
+    lastSnapshotSeq: 0,
     lastSnapshot: 0,
     lastSnapshotReceived: 0,
     lastInputSent: 0,
+    lastHudUpdate: 0,
+    lastScoreLeft: 0,
+    lastScoreRight: 0,
+    lastWinner: null,
+    lastRallyHits: 0,
+    lastBirdTouched: null,
+    lastBirdServed: false,
+    lastNetSound: 0,
     pendingInputTaps: new Set(),
     serverUrl: "",
   };
@@ -123,7 +133,7 @@
 
   const shotTuning = {
     perfectWindow: 0.68,
-    hitWindow: 76,
+    hitWindow: 72,
     netRiskY: netTop + 18,
     smashRecovery: 0.18,
     inputBuffer: 0.16,
@@ -132,6 +142,10 @@
   const onlineTuning = {
     inputInterval: 1000 / 45,
     snapshotInterval: 1000 / 30,
+    remotePlayerBlend: 0.5,
+    localPlayerBlend: 0.18,
+    birdBlend: 0.62,
+    hudInterval: 220,
   };
 
   const pixelArt = loadPixelArt({
@@ -440,6 +454,7 @@
   }
 
   window.addEventListener("keydown", (event) => {
+    primeAudio();
     const code = event.key.length === 1 ? event.key.toLowerCase() : event.key;
     keyDown(code);
     if (["ArrowLeft", "ArrowRight", "ArrowUp", " "].includes(event.key)) {
@@ -455,16 +470,25 @@
     keyUp(code);
     sendOnlineInput();
   });
+  window.addEventListener("pointerdown", primeAudio, { passive: true });
 
   startButton.addEventListener("click", () => {
+    primeAudio();
     resetMatch();
   });
   overlayActionButton.addEventListener("click", () => {
+    primeAudio();
     if (state.paused) togglePause();
     else resetMatch();
   });
-  resetButton.addEventListener("click", resetMatch);
-  pauseButton.addEventListener("click", togglePause);
+  resetButton.addEventListener("click", () => {
+    primeAudio();
+    resetMatch();
+  });
+  pauseButton.addEventListener("click", () => {
+    primeAudio();
+    togglePause();
+  });
   assistButton.addEventListener("click", () => {
     state.assist = !state.assist;
     assistButton.textContent = state.assist ? "辅助" : "硬核";
@@ -519,6 +543,7 @@
     let startY = 0;
     const begin = (event) => {
       event.preventDefault();
+      primeAudio();
       startY = event.clientY;
       if (hold) keyDown(hold);
       if (tap) keyDown(tap);
@@ -526,12 +551,14 @@
     };
     const end = (event) => {
       event.preventDefault();
+      let dropKey = null;
       if (tap && event.clientY - startY > 22) {
-        const dropKey = tap === "j" ? "s" : tap === "1" ? "ArrowDown" : null;
+        dropKey = tap === "j" ? "s" : tap === "1" ? "ArrowDown" : null;
         if (dropKey) keyDown(dropKey);
       }
       if (hold) keyUp(hold);
       if (tap) keyUp(tap);
+      if (dropKey) keyUp(dropKey);
       sendOnlineInput();
     };
     button.addEventListener("pointerdown", begin);
@@ -858,6 +885,7 @@
       applyOnlineSnapshot(packet);
     }
     if (packet.type === "start" && online.role === "guest") {
+      primeAudio();
       startScreen.classList.add("hidden");
       gameStage.classList.remove("hidden");
       overlay.classList.add("hidden");
@@ -872,9 +900,19 @@
     online.roomCode = normalizeRoomCode(code);
     online.peerId = "";
     online.connected = false;
+    online.snapshotSeq = 0;
+    online.lastSnapshotSeq = 0;
     online.lastSnapshot = 0;
     online.lastSnapshotReceived = 0;
     online.lastInputSent = 0;
+    online.lastHudUpdate = 0;
+    online.lastScoreLeft = 0;
+    online.lastScoreRight = 0;
+    online.lastWinner = null;
+    online.lastRallyHits = 0;
+    online.lastBirdTouched = null;
+    online.lastBirdServed = false;
+    online.lastNetSound = 0;
     online.pendingInputTaps.clear();
     remoteKeys.clear();
     remoteTaps.clear();
@@ -1048,6 +1086,63 @@
       .map((point) => ({ x: point.x, y: point.y }));
   }
 
+  function mix(current, target, blend) {
+    if (!Number.isFinite(target)) return current;
+    if (!Number.isFinite(current)) return target;
+    return current + (target - current) * blend;
+  }
+
+  function blendNumberProp(target, source, key, blend) {
+    if (Number.isFinite(source?.[key])) target[key] = mix(target[key], source[key], blend);
+  }
+
+  function applyPlayerSnapshot(player, snapshot, blend) {
+    if (!snapshot) return;
+    if (blend >= 1) {
+      player.x = snapshot.x;
+      player.y = snapshot.y;
+      player.vx = snapshot.vx;
+      player.vy = snapshot.vy;
+    } else {
+      blendNumberProp(player, snapshot, "x", blend);
+      blendNumberProp(player, snapshot, "y", blend);
+      blendNumberProp(player, snapshot, "vx", blend);
+      blendNumberProp(player, snapshot, "vy", blend);
+    }
+    player.facing = snapshot.facing;
+    player.swing = snapshot.swing;
+    player.smash = snapshot.smash;
+    player.charge = snapshot.charge;
+    player.recovery = snapshot.recovery;
+    player.foot = snapshot.foot;
+    player.onGround = snapshot.onGround;
+    player.lastHit = snapshot.lastHit;
+    player.aiTargetX = snapshot.aiTargetX;
+    player.aiShot = snapshot.aiShot;
+    player.aiPlan = snapshot.aiPlan;
+  }
+
+  function applyBirdSnapshot(snapshot, blend) {
+    if (!snapshot) return;
+    if (blend >= 1) {
+      bird.x = snapshot.x;
+      bird.y = snapshot.y;
+      bird.vx = snapshot.vx;
+      bird.vy = snapshot.vy;
+    } else {
+      blendNumberProp(bird, snapshot, "x", blend);
+      blendNumberProp(bird, snapshot, "y", blend);
+      blendNumberProp(bird, snapshot, "vx", blend);
+      blendNumberProp(bird, snapshot, "vy", blend);
+    }
+    bird.angle = snapshot.angle;
+    bird.spin = snapshot.spin;
+    bird.served = snapshot.served;
+    bird.server = snapshot.server;
+    bird.lastTouched = snapshot.lastTouched;
+    bird.trail = cleanTrail(snapshot.trail);
+  }
+
   function sendOnlineInput(force = false) {
     if (state.matchMode !== "online" || online.role !== "guest") return;
     const now = performance.now();
@@ -1108,6 +1203,7 @@
     online.lastSnapshot = now;
     sendOnlinePacket({
       type: "snapshot",
+      seq: (online.snapshotSeq += 1),
       running: state.running,
       paused: state.paused,
       winner: state.winner,
@@ -1132,8 +1228,70 @@
     });
   }
 
+  function snapshotSoundForHit(packet) {
+    if (!packet.bird?.lastTouched) return;
+    if (packet.bird.lastTouched === online.lastBirdTouched && packet.rallyHits === online.lastRallyHits) return;
+    if (!packet.bird.served && !online.lastBirdServed) return;
+    const speed = Math.hypot(packet.bird.vx || 0, packet.bird.vy || 0);
+    const smash = speed > 760 || packet.left?.smash > 0 || packet.right?.smash > 0;
+    const perfect = speed > 580 || packet.rallyHeat > 0.55;
+    blip(smash ? 180 : perfect ? 520 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : perfect ? 0.034 : 0.026);
+  }
+
+  function snapshotSoundForScore(packet) {
+    const leftScored = packet.score.left > online.lastScoreLeft;
+    const rightScored = packet.score.right > online.lastScoreRight;
+    if (!leftScored && !rightScored) return;
+    blip(leftScored ? 560 : 260, 0.12, 0.032);
+  }
+
+  function snapshotSoundForNet(packet) {
+    const now = performance.now();
+    if (!packet.bird?.served || now - online.lastNetSound < 180) return;
+    const nearNet = Math.abs((packet.bird.x || 0) - netX) < 18;
+    const lowEnough = (packet.bird.y || 0) + bird.r > netTop;
+    const changingSide = Math.sign(packet.bird.vx || 0) !== Math.sign(bird.vx || 0);
+    if (nearNet && lowEnough && changingSide) {
+      online.lastNetSound = now;
+      blip(130, 0.08, 0.026);
+    }
+  }
+
+  function playSnapshotSounds(packet) {
+    if (!state.audioReady || !state.audio) return;
+    snapshotSoundForScore(packet);
+    snapshotSoundForHit(packet);
+    snapshotSoundForNet(packet);
+  }
+
+  function rememberSnapshotForEvents(packet) {
+    online.lastSnapshotSeq = packet.seq || online.lastSnapshotSeq;
+    online.lastScoreLeft = packet.score?.left || 0;
+    online.lastScoreRight = packet.score?.right || 0;
+    online.lastWinner = packet.winner || null;
+    online.lastRallyHits = packet.rallyHits || 0;
+    online.lastBirdTouched = packet.bird?.lastTouched || null;
+    online.lastBirdServed = Boolean(packet.bird?.served);
+  }
+
+  function shouldSnapOnlineSnapshot(packet) {
+    const birdSnapshot = packet.bird;
+    if (!birdSnapshot) return false;
+    const scoreChanged = packet.score.left !== online.lastScoreLeft || packet.score.right !== online.lastScoreRight;
+    const winnerChanged = packet.winner !== online.lastWinner;
+    const newRally = online.lastBirdServed && !birdSnapshot.served;
+    const serveStateChanged = birdSnapshot.served !== online.lastBirdServed || birdSnapshot.server !== bird.server;
+    const pauseStateChanged = Boolean(packet.pendingServer) !== Boolean(state.pendingServer);
+    const drift = Math.hypot((birdSnapshot.x || 0) - bird.x, (birdSnapshot.y || 0) - bird.y);
+    return scoreChanged || winnerChanged || newRally || serveStateChanged || pauseStateChanged || drift > 150;
+  }
+
   function applyOnlineSnapshot(packet) {
-    online.lastSnapshotReceived = performance.now();
+    const now = performance.now();
+    if (packet.seq && packet.seq <= online.lastSnapshotSeq) return;
+    playSnapshotSounds(packet);
+    online.lastSnapshotReceived = now;
+    const snap = shouldSnapOnlineSnapshot(packet);
     state.running = packet.running;
     state.paused = packet.paused;
     state.winner = packet.winner;
@@ -1153,11 +1311,21 @@
     state.pendingServer = packet.pendingServer;
     state.targetScore = packet.targetScore;
     state.playStyle = packet.playStyle;
-    Object.assign(left, packet.left);
-    Object.assign(right, packet.right);
-    Object.assign(bird, packet.bird);
-    bird.trail = cleanTrail(packet.bird?.trail);
-    updateHud();
+    applyPlayerSnapshot(left, packet.left, snap ? 1 : onlineTuning.remotePlayerBlend);
+    applyPlayerSnapshot(right, packet.right, snap ? 1 : onlineTuning.localPlayerBlend);
+    applyBirdSnapshot(packet.bird, snap ? 1 : onlineTuning.birdBlend);
+    const scoreChanged = packet.score.left !== online.lastScoreLeft || packet.score.right !== online.lastScoreRight;
+    const winnerChanged = packet.winner !== online.lastWinner;
+    if (
+      now - online.lastHudUpdate > onlineTuning.hudInterval ||
+      winnerChanged ||
+      scoreChanged ||
+      state.paused
+    ) {
+      online.lastHudUpdate = now;
+      updateHud();
+    }
+    rememberSnapshotForEvents(packet);
     if (state.running) {
       startScreen.classList.add("hidden");
       gameStage.classList.remove("hidden");
@@ -1181,12 +1349,19 @@
   }
 
   function initAudio() {
-    if (state.audioReady) return;
+    if (state.audioReady) {
+      if (state.audio?.state === "suspended") state.audio.resume();
+      return;
+    }
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     if (!AudioContext) return;
     state.audio = new AudioContext();
     state.audioReady = true;
     if (state.audio.state === "suspended") state.audio.resume();
+  }
+
+  function primeAudio() {
+    if (!state.muted) initAudio();
   }
 
   function blip(freq, duration, gain = 0.035) {
@@ -1378,7 +1553,7 @@
     const progress = clamp(player.swing / 0.26, 0, 1);
     const timing = 1 - Math.abs(progress - shotTuning.perfectWindow) / shotTuning.perfectWindow;
     const reach = 1 - dist / shotTuning.hitWindow;
-    return clamp(timing * 0.64 + reach * 0.36, 0, 1);
+    return clamp(timing * 0.72 + reach * 0.28, 0, 1);
   }
 
   function shotContact(player) {
@@ -1395,8 +1570,8 @@
     const farCorner = attackingLeft ? W - 118 : 118;
     const midCourt = attackingLeft ? W - 235 : 235;
     const spread = (1 - quality) * 72 + Math.random() * 36;
-    if (shotType === "drop") return nearNet + player.facing * (38 + spread * 0.42);
-    if (shotType === "smash") return midCourt + player.facing * (contact.front * 80 + spread * 0.5);
+    if (shotType === "drop") return nearNet + player.facing * (18 + spread * 0.22);
+    if (shotType === "smash") return midCourt + player.facing * (contact.front * 56 + spread * 0.34);
     if (shotType === "drive") return midCourt + player.facing * (contact.front * 42 + spread);
     return farCorner - player.facing * spread;
   }
@@ -1456,30 +1631,32 @@
 
     const quality = swingQuality(player, dist);
     const contact = shotContact(player);
-    const smash = player.smash > 0 || (!player.onGround && bird.y < ground - 160 && quality > 0.42);
+    const highContact = bird.y < ground - 172;
+    const risingSwing = player.swing > 0.08;
+    const wantsAttack = player.smash > 0 || (!player.onGround && highContact);
+    const smash = wantsAttack && highContact && risingSwing && quality > 0.38;
     const dropShot = wantsDropShot(player) && !smash;
-    const drive = !smash && !dropShot && contact.front > 0.42 && quality > 0.55;
+    const drive = !dropShot && !smash && (wantsAttack || contact.front > 0.42) && quality > 0.46;
     const shotType = dropShot ? "drop" : smash ? "smash" : drive ? "drive" : "clear";
     const targetX = opponentTargetX(player, shotType, quality, contact);
     const dx = targetX - bird.x;
     const heatBonus = state.rallyHeat * 0.08;
-    const lift = smash ? 108 - quality * 80 : dropShot ? 230 + (1 - quality) * 130 : drive ? 360 : 515 + contact.height * 80;
+    const lift = dropShot ? 96 + (1 - quality) * 56 : drive ? 292 + quality * 32 : 515 + contact.height * 80;
     const pace =
       smash
-        ? 1.64 + quality * 0.34 + heatBonus
+        ? 1.5 + quality * 0.3 + heatBonus
         : dropShot
-          ? 0.64 + quality * 0.18
+          ? 0.44 + quality * 0.13
           : drive
-            ? 1.42 + heatBonus * 0.65
+            ? 1.3 + quality * 0.12 + heatBonus * 0.65
             : 1.08 + quality * 0.24;
     const horizontal = clamp(dx * pace + contact.front * (smash ? 130 : 72), -820, 820);
 
     bird.vx = horizontal;
-    bird.vy = -lift + player.vy * 0.1;
-    if (smash) bird.vy = clamp(bird.vy, -210, 115);
+    bird.vy = smash ? 160 + quality * 165 + Math.max(0, contact.height) * 52 : -lift + player.vy * 0.1;
     if (dropShot && quality < 0.32 && bird.y > shotTuning.netRiskY) {
-      bird.vx *= 0.58;
-      bird.vy = -82;
+      bird.vx *= 0.48;
+      bird.vy = -38;
     }
     bird.x += player.facing * 4;
     bird.lastTouched = player.side;
@@ -1697,14 +1874,33 @@
       return;
     }
 
+    extrapolateRemotePlayer(left, dt);
     updateGuestLocalPlayer(right, dt);
-    left.swing = Math.max(0, left.swing - dt);
-    left.smash = Math.max(0, left.smash - dt);
-    left.recovery = Math.max(0, left.recovery - dt);
     right.lastHit = Math.max(0, right.lastHit - dt);
     hitBird(right);
-    if (bird.server === "right" || bird.served) updateBirdPreview(dt);
+    updateBirdPreview(dt);
     state.shake = Math.max(0, state.shake - dt * 18);
+  }
+
+  function extrapolateRemotePlayer(player, dt) {
+    if (performance.now() - online.lastSnapshotReceived > 140) return;
+    const [minX, maxX] = sideBounds(player.side);
+    player.x = clamp(player.x + player.vx * dt, minX, maxX);
+    if (!player.onGround || Math.abs(player.vy) > 1) {
+      player.vy += 1850 * dt;
+      player.y += player.vy * dt;
+      if (player.y >= ground) {
+        player.y = ground;
+        player.vy = 0;
+        player.onGround = true;
+      }
+    }
+    player.swing = Math.max(0, player.swing - dt);
+    player.smash = Math.max(0, player.smash - dt);
+    player.recovery = Math.max(0, player.recovery - dt);
+    player.charge = player.smash > 0 ? player.charge : Math.max(0, player.charge - dt * 5);
+    player.lastHit = Math.max(0, player.lastHit - dt);
+    player.foot += Math.abs(player.vx) * dt * 0.03;
   }
 
   function updateGuestLocalPlayer(player, dt) {
