@@ -44,7 +44,7 @@
     nearServiceLeft: 212,
     nearServiceRight: W - 212,
   };
-  const netTop = 286;
+  const netTop = 321;
 
   const keys = new Set();
   const taps = new Set();
@@ -189,6 +189,7 @@
       facing: side === "left" ? 1 : -1,
       swing: 0,
       smash: 0,
+      scoop: 0,
       charge: 0,
       recovery: 0,
       foot: 0,
@@ -1112,6 +1113,7 @@
     player.facing = snapshot.facing;
     player.swing = snapshot.swing;
     player.smash = snapshot.smash;
+    player.scoop = snapshot.scoop || 0;
     player.charge = snapshot.charge;
     player.recovery = snapshot.recovery;
     player.foot = snapshot.foot;
@@ -1170,6 +1172,7 @@
       facing: player.facing,
       swing: player.swing,
       smash: player.smash,
+      scoop: player.scoop,
       charge: player.charge,
       recovery: player.recovery,
       foot: player.foot,
@@ -1479,13 +1482,23 @@
   }
 
   function wantsSmash(player) {
-    if (player.side === "left") return keyBuffered(player.side, "k");
-    if (!controlledByAi(player)) return keyBuffered(player.side, "2");
+    if (player.side === "left") {
+      return keyBuffered(player.side, "k") && (!player.onGround || (!bird.served && bird.server === player.side));
+    }
+    if (!controlledByAi(player)) {
+      return keyBuffered(player.side, "2") && (!player.onGround || (!bird.served && bird.server === player.side));
+    }
     if (!bird.served && bird.server === "right") {
       if (state.difficulty === "easy") return false;
       return state.serveDelay <= 0 && player.aiShot === "smash";
     }
     return player.aiShot === "smash" && bird.x > netX && bird.y < 280 && distanceToRacket(player) < 78;
+  }
+
+  function wantsScoop(player) {
+    if (!bird.served || !player.onGround || controlledByAi(player)) return false;
+    if (player.side === "left") return keyBuffered(player.side, "k");
+    return keyBuffered(player.side, "2");
   }
 
   function updatePlayer(player, dt) {
@@ -1525,10 +1538,14 @@
     if (wantsSmash(player)) {
       player.swing = 0.26;
       player.smash = 0.2;
+    } else if (wantsScoop(player)) {
+      player.swing = 0.26;
+      player.scoop = 0.26;
     }
 
     player.swing = Math.max(0, player.swing - dt);
     player.smash = Math.max(0, player.smash - dt);
+    player.scoop = Math.max(0, player.scoop - dt);
     player.recovery = Math.max(0, player.recovery - dt);
     player.charge = player.smash > 0 ? 1 : Math.max(0, player.charge - dt * 5);
     player.foot += Math.abs(player.vx) * dt * 0.03;
@@ -1572,6 +1589,7 @@
     const spread = (1 - quality) * 72 + Math.random() * 36;
     if (shotType === "drop") return nearNet + player.facing * (18 + spread * 0.22);
     if (shotType === "smash") return midCourt + player.facing * (contact.front * 56 + spread * 0.34);
+    if (shotType === "scoop") return farCorner - player.facing * (spread * 0.42);
     if (shotType === "drive") return midCourt + player.facing * (contact.front * 42 + spread);
     return farCorner - player.facing * spread;
   }
@@ -1635,22 +1653,31 @@
     const risingSwing = player.swing > 0.08;
     const wantsAttack = player.smash > 0 || (!player.onGround && highContact);
     const smash = wantsAttack && highContact && risingSwing && quality > 0.38;
-    const dropShot = wantsDropShot(player) && !smash;
-    const drive = !dropShot && !smash && (wantsAttack || contact.front > 0.42) && quality > 0.46;
-    const shotType = dropShot ? "drop" : smash ? "smash" : drive ? "drive" : "clear";
+    const scoop = player.scoop > 0 && player.onGround && !smash;
+    const dropShot = wantsDropShot(player) && !smash && !scoop;
+    const drive = !dropShot && !smash && !scoop && (wantsAttack || contact.front > 0.42) && quality > 0.46;
+    const shotType = dropShot ? "drop" : smash ? "smash" : scoop ? "scoop" : drive ? "drive" : "clear";
     const targetX = opponentTargetX(player, shotType, quality, contact);
     const dx = targetX - bird.x;
     const heatBonus = state.rallyHeat * 0.08;
-    const lift = dropShot ? 96 + (1 - quality) * 56 : drive ? 292 + quality * 32 : 515 + contact.height * 80;
+    const lift = dropShot
+      ? 96 + (1 - quality) * 56
+      : scoop
+        ? 645 + quality * 95 + Math.max(0, -contact.height) * 72
+        : drive
+          ? 292 + quality * 32
+          : 515 + contact.height * 80;
     const pace =
       smash
         ? 1.5 + quality * 0.3 + heatBonus
         : dropShot
           ? 0.44 + quality * 0.13
-          : drive
-            ? 1.3 + quality * 0.12 + heatBonus * 0.65
-            : 1.08 + quality * 0.24;
-    const horizontal = clamp(dx * pace + contact.front * (smash ? 130 : 72), -820, 820);
+          : scoop
+            ? 0.88 + quality * 0.14
+            : drive
+              ? 1.3 + quality * 0.12 + heatBonus * 0.65
+              : 1.08 + quality * 0.24;
+    const horizontal = clamp(dx * pace + contact.front * (smash ? 130 : scoop ? 44 : 72), -820, 820);
 
     bird.vx = horizontal;
     bird.vy = smash ? 160 + quality * 165 + Math.max(0, contact.height) * 52 : -lift + player.vy * 0.1;
@@ -1660,20 +1687,34 @@
     }
     bird.x += player.facing * 4;
     bird.lastTouched = player.side;
-    bird.spin = player.facing * (smash ? 18 + quality * 6 : dropShot ? 7 : 10 + quality * 4);
-    player.lastHit = smash ? 0.28 : 0.2;
+    bird.spin = player.facing * (smash ? 18 + quality * 6 : dropShot ? 7 : scoop ? 8 + quality * 2 : 10 + quality * 4);
+    player.lastHit = smash ? 0.28 : scoop ? 0.22 : 0.2;
     if (smash) player.recovery = shotTuning.smashRecovery + (1 - quality) * 0.08;
     const perfect = quality > 0.78;
-    state.shake = smash ? 7 + quality * 4 : perfect ? 5 : 3;
+    state.shake = smash ? 7 + quality * 4 : scoop ? 4 : perfect ? 5 : 3;
     state.hitStop = smash ? 0.045 + quality * 0.025 : perfect ? 0.035 : 0;
     const milestone = registerRallyHit(player, quality, shotType);
     if (!milestone) {
-      state.message = smash ? (perfect ? "完美扣杀!" : "扣杀!") : dropShot ? (perfect ? "贴网小球" : "网前小球") : perfect ? "甜点击球" : "回击";
+      state.message = smash
+        ? perfect
+          ? "完美扣杀!"
+          : "扣杀!"
+        : scoop
+          ? perfect
+            ? "高挑救球"
+            : "捞球"
+          : dropShot
+            ? perfect
+              ? "贴网小球"
+              : "网前小球"
+            : perfect
+              ? "甜点击球"
+              : "回击";
       state.messageTimer = smash || perfect ? 0.48 : state.rallyHeat > 0.6 ? 0.38 : 0.3;
     }
-    burst(bird.x, bird.y, smash || perfect ? "#f8d75a" : "#f7f7ef", smash ? 13 : perfect ? 11 : 8);
+    burst(bird.x, bird.y, smash || perfect ? "#f8d75a" : scoop ? "#d9fff0" : "#f7f7ef", smash ? 13 : perfect ? 11 : 8);
     if (smash || perfect) burst(bird.x, bird.y, "rgba(248, 215, 90, 0.88)", smash ? 9 : 5, "streak", player.facing);
-    blip(smash ? 180 : perfect ? 520 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : perfect ? 0.034 : 0.026);
+    blip(smash ? 180 : scoop ? 360 : perfect ? 520 : 440, smash ? 0.09 : 0.045, smash ? 0.045 : perfect ? 0.034 : 0.026);
   }
 
   function burst(x, y, color, count, type = "spark", direction = 0) {
@@ -1897,6 +1938,7 @@
     }
     player.swing = Math.max(0, player.swing - dt);
     player.smash = Math.max(0, player.smash - dt);
+    player.scoop = Math.max(0, player.scoop - dt);
     player.recovery = Math.max(0, player.recovery - dt);
     player.charge = player.smash > 0 ? player.charge : Math.max(0, player.charge - dt * 5);
     player.lastHit = Math.max(0, player.lastHit - dt);
@@ -1935,11 +1977,13 @@
     if (buffered("1") || buffered("j")) player.swing = 0.22;
     if (buffered("2") || buffered("k")) {
       player.swing = 0.26;
-      player.smash = 0.2;
+      if (!player.onGround || (!bird.served && bird.server === player.side)) player.smash = 0.2;
+      else player.scoop = 0.26;
     }
 
     player.swing = Math.max(0, player.swing - dt);
     player.smash = Math.max(0, player.smash - dt);
+    player.scoop = Math.max(0, player.scoop - dt);
     player.recovery = Math.max(0, player.recovery - dt);
     player.charge = player.smash > 0 ? 1 : Math.max(0, player.charge - dt * 5);
     player.foot += Math.abs(player.vx) * dt * 0.03;
@@ -2250,10 +2294,11 @@
     const racket = racketPoint(player);
     const preparingDrop = wantsDropShot(player) && player.swing <= 0;
     const preparingSmash = (player.smash > 0 || (controlledByAi(player) && player.aiShot === "smash")) && player.swing <= 0.08;
+    const preparingScoop = player.scoop > 0 && player.swing <= 0.08;
     const lean = clamp(player.vx / 520, -0.42, 0.42);
     const swingArc = Math.sin((player.swing / 0.26) * Math.PI);
     const headX = player.x + lean * 8;
-    const torsoX = player.x + player.facing * (preparingSmash ? 8 : preparingDrop ? -2 : 4) + lean * 13;
+    const torsoX = player.x + player.facing * (preparingSmash ? 8 : preparingDrop || preparingScoop ? -2 : 4) + lean * 13;
     const hipX = player.x - lean * 8;
 
     ctx.save();
@@ -2378,7 +2423,22 @@
       drawSmashSprite(racket.x + player.facing * 14, racket.y - 4, player.facing);
     }
 
-    if (preparingSmash || preparingDrop) {
+    if (player.scoop > 0) {
+      ctx.strokeStyle = "rgba(217, 255, 240, 0.88)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(
+        racket.x - player.facing * 6,
+        racket.y + 10,
+        28,
+        player.facing > 0 ? 1.82 : Math.PI - 0.48,
+        player.facing > 0 ? 0.1 : Math.PI + 1.32,
+        true
+      );
+      ctx.stroke();
+    }
+
+    if (preparingSmash || preparingDrop || preparingScoop) {
       ctx.globalAlpha = preparingSmash ? 0.72 : 0.5;
       ctx.strokeStyle = preparingSmash ? "rgba(248, 215, 90, 0.92)" : "rgba(217, 255, 240, 0.82)";
       ctx.lineWidth = preparingSmash ? 3 : 2;
@@ -2386,6 +2446,9 @@
       if (preparingSmash) {
         ctx.moveTo(racket.x - player.facing * 20, racket.y - 24);
         ctx.lineTo(racket.x + player.facing * 12, racket.y - 38);
+      } else if (preparingScoop) {
+        ctx.moveTo(racket.x - player.facing * 22, racket.y + 18);
+        ctx.quadraticCurveTo(racket.x + player.facing * 4, racket.y + 34, racket.x + player.facing * 32, racket.y + 4);
       } else {
         ctx.moveTo(racket.x - player.facing * 20, racket.y + 12);
         ctx.lineTo(racket.x + player.facing * 28, racket.y + 16);

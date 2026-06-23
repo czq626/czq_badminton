@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>火柴人羽毛球</title>
+    <title>一拍定胜负</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="shell">
-      <section class="start-screen" id="startScreen" aria-label="火柴人羽毛球开始界面">
+      <section class="start-screen" id="startScreen" aria-label="一拍定胜负开始界面">
         <div class="start-copy">
-          <p class="eyebrow">Arcade Badminton</p>
-          <h1>火柴人羽毛球</h1>
+          <p class="eyebrow">Stick Badminton</p>
+          <h1>一拍定胜负</h1>
           <p id="startSummary">选择模式，抢落点、跳扣杀，先到 7 分且领先 2 分获胜。</p>
         </div>
 
@@ -89,7 +89,7 @@
       </section>
 
       <section class="game-stage hidden" id="gameStage" aria-label="比赛界面">
-      <section class="game-wrap" aria-label="火柴人羽毛球游戏">
+      <section class="game-wrap" aria-label="一拍定胜负游戏">
         <canvas id="game" width="960" height="540"></canvas>
 
         <div class="hud">
@@ -115,7 +115,7 @@
 
         <div class="overlay" id="overlay">
           <div class="panel">
-            <h1>火柴人羽毛球</h1>
+            <h1>一拍定胜负</h1>
             <p id="overlayText">抢落点、跳扣杀，先到 7 分获胜。</p>
             <button id="overlayActionButton" type="button">继续</button>
           </div>
@@ -132,7 +132,7 @@
           </div>
           <div class="touch-pad actions">
             <button type="button" data-tap="j">挥拍</button>
-            <button type="button" data-tap="k">扣杀</button>
+            <button type="button" data-tap="k">捞/扣</button>
             <button type="button" data-hold="s">短球</button>
           </div>
         </div>
@@ -145,7 +145,7 @@
           </div>
           <div class="touch-pad actions">
             <button type="button" data-tap="1">挥拍</button>
-            <button type="button" data-tap="2">扣杀</button>
+            <button type="button" data-tap="2">捞/扣</button>
             <button type="button" data-hold="ArrowDown">短球</button>
           </div>
         </div>
@@ -154,11 +154,11 @@
       <section class="controls">
         <div>
           <h2>蓝队</h2>
-          <p><kbd>A</kbd><kbd>D</kbd> 移动 <kbd>W</kbd> 跳跃 <kbd>J</kbd> 挥拍 <kbd>K</kbd> 扣杀/挑球 <kbd>S</kbd> 网前小球</p>
+          <p><kbd>A</kbd><kbd>D</kbd> 移动 <kbd>W</kbd> 跳跃 <kbd>J</kbd> 挥拍 <kbd>K</kbd> 地捞/空扣 <kbd>S</kbd> 网前小球</p>
         </div>
         <div>
           <h2>红队</h2>
-          <p><kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳跃 <kbd>1</kbd> 挥拍 <kbd>2</kbd> 扣杀/挑球 <kbd>↓</kbd> 网前小球</p>
+          <p><kbd>←</kbd><kbd>→</kbd> 移动 <kbd>↑</kbd> 跳跃 <kbd>1</kbd> 挥拍 <kbd>2</kbd> 地捞/空扣 <kbd>↓</kbd> 网前小球</p>
         </div>
       </section>
       </section>
