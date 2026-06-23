@@ -14,6 +14,9 @@
 - Reworked room mode around a refreshable room list with create/join actions, optional WebSocket room service, and local same-origin fallback.
 - Added a zero-dependency `room-server.js` for cross-device rooms and `build-single-html.js` for generating a distributable single HTML frontend.
 - Renamed the game to `一拍定胜负`.
+- Replaced the central room list flow with WebRTC invite/answer peer-to-peer matches.
+- Removed the standalone WebSocket room server from the active project flow.
+- Hid the invite match entry while keeping the underlying peer-to-peer implementation available.
 - Lowered the gameplay net height by another 20% so rallies and serves have more clearance.
 - Changed the strong-action key so ground presses scoop/lift the shuttle while airborne presses still attempt smashes.
 - Lowered the net collision/drawing height and raised long-serve arcs so standard serves clear the net more reliably.

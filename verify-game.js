@@ -26,7 +26,6 @@ function assertMatch(source, pattern, name) {
 const html = fs.readFileSync("index.html", "utf8");
 const css = fs.readFileSync("styles.css", "utf8");
 const js = fs.readFileSync("game.js", "utf8");
-const server = fs.readFileSync("room-server.js", "utf8");
 const bundler = fs.readFileSync("build-single-html.js", "utf8");
 
 assertIncludes(html, '<canvas id="game" width="960" height="540">', "canvas has expected 16:9 resolution");
@@ -50,19 +49,22 @@ assertMatch(js, /function matchCopy\b/, "function matchCopy");
   "rightScore",
   "onlinePanel",
   "onlineStatus",
-  "roomServerInput",
-  "refreshRoomsButton",
   "createRoomButton",
+  "acceptAnswerButton",
+  "joinRoomButton",
   "resetOnlineButton",
-  "roomList",
-  "roomEmpty",
+  "hostOfferOutput",
+  "hostAnswerInput",
+  "guestOfferInput",
+  "guestAnswerOutput",
 ].forEach((id) => assertIncludes(html, `id="${id}"`, `required element #${id}`));
 
-["单人挑战", "本地双人", "房间模式", "蓝队", "红队", "休闲", "普通", "高手", "7分", "11分", "标准", "趣味", "开始游戏", "挥拍", "扣杀", "短球"].forEach((text) =>
+["单人挑战", "本地双人", "蓝队", "红队", "休闲", "普通", "高手", "7分", "11分", "标准", "趣味", "开始游戏", "挥拍", "扣杀", "短球"].forEach((text) =>
   assertIncludes(html, text, `visible label ${text}`),
 );
+assertIncludes(html, 'data-match-mode="online" hidden', "invite match entry is hidden but preserved");
 
-["drawCourt", "drawPlayer", "drawBird", "updateDemo", "awardPoint", "predictLandingX", "refreshOnlineRooms", "createOnlineRoom", "joinOnlineRoom", "sendOnlineSnapshot", "applyOnlineSnapshot"].forEach((fn) =>
+["drawCourt", "drawPlayer", "drawBird", "updateDemo", "awardPoint", "predictLandingX", "createOnlineOffer", "acceptOnlineAnswer", "joinOnlineOffer", "sendOnlineSnapshot", "applyOnlineSnapshot"].forEach((fn) =>
   assertMatch(js, new RegExp(`function ${fn}\\b`), `function ${fn}`),
 );
 
@@ -70,8 +72,9 @@ assertMatch(js, /function matchCopy\b/, "function matchCopy");
   "matchMode",
   "singlePlayer",
   "matchModeButtons",
-  "BroadcastChannel",
-  "WebSocket",
+  "RTCPeerConnection",
+  "RTCSessionDescription",
+  "dataChannel",
   "remoteKeys",
   "difficulty",
   "targetScore",
@@ -88,12 +91,8 @@ assertMatch(js, /function matchCopy\b/, "function matchCopy");
   assertIncludes(js, token, `game state token ${token}`),
 );
 
-[".start-screen", ".mode-card", ".online-panel", ".room-list", ".room-row", ".touch-controls", ".status-strip", ".overlay", "@media (max-width: 720px)"].forEach((selector) =>
+[".start-screen", ".mode-card", ".online-panel", ".invite-grid", ".invite-actions", ".touch-controls", ".status-strip", ".overlay", "@media (max-width: 720px)"].forEach((selector) =>
   assertIncludes(css, selector, `CSS rule ${selector}`),
-);
-
-["create-room", "join-room", "relay", "Sec-WebSocket-Accept"].forEach((token) =>
-  assertIncludes(server, token, `room server token ${token}`),
 );
 
 ["dist", "game.html", "data:", "styles.css", "game.js"].forEach((token) =>
@@ -105,13 +104,6 @@ try {
   pass("game.js syntax");
 } catch (error) {
   fail("game.js syntax", error.stderr ? error.stderr.toString() : error.message);
-}
-
-try {
-  execFileSync("node", ["--check", "room-server.js"], { stdio: "pipe" });
-  pass("room-server.js syntax");
-} catch (error) {
-  fail("room-server.js syntax", error.stderr ? error.stderr.toString() : error.message);
 }
 
 try {

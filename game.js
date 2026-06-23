@@ -23,12 +23,14 @@
   const styleButtons = [...document.querySelectorAll("[data-style]")];
   const onlinePanel = document.getElementById("onlinePanel");
   const onlineStatus = document.getElementById("onlineStatus");
-  const roomServerInput = document.getElementById("roomServerInput");
-  const refreshRoomsButton = document.getElementById("refreshRoomsButton");
   const createRoomButton = document.getElementById("createRoomButton");
+  const acceptAnswerButton = document.getElementById("acceptAnswerButton");
+  const joinRoomButton = document.getElementById("joinRoomButton");
   const resetOnlineButton = document.getElementById("resetOnlineButton");
-  const roomList = document.getElementById("roomList");
-  const roomEmpty = document.getElementById("roomEmpty");
+  const hostOfferOutput = document.getElementById("hostOfferOutput");
+  const hostAnswerInput = document.getElementById("hostAnswerInput");
+  const guestOfferInput = document.getElementById("guestOfferInput");
+  const guestAnswerOutput = document.getElementById("guestAnswerOutput");
   const touchButtons = [...document.querySelectorAll("[data-hold], [data-tap]")];
 
   const W = canvas.width;
@@ -53,10 +55,6 @@
   const remoteTaps = new Set();
   const remoteInputBuffer = new Map();
   const settingsKey = "stick-badminton-settings";
-  const roomServerKey = "stick-badminton-room-server";
-  const defaultRoomServer = "ws://192.168.1.103:8787";
-  const roomStorageKey = "stick-badminton-rooms";
-  const roomLobbyChannelName = "stick-badminton-lobby";
 
   const state = {
     running: false,
@@ -89,20 +87,16 @@
   };
 
   const online = {
-    wsSupported: "WebSocket" in window,
-    localSupported: "BroadcastChannel" in window,
-    ws: null,
+    rtcSupported: "RTCPeerConnection" in window && "RTCSessionDescription" in window,
+    peerConnection: null,
+    dataChannel: null,
     roomChannel: null,
-    lobbyChannel: null,
-    transport: "local",
+    transport: "invite",
     role: null,
     connected: false,
     roomCode: "",
-    rooms: [],
     clientId: Math.random().toString(36).slice(2, 10),
     peerId: "",
-    refreshTimer: null,
-    heartbeatTimer: null,
     snapshotSeq: 0,
     lastSnapshotSeq: 0,
     lastSnapshot: 0,
@@ -117,7 +111,6 @@
     lastBirdServed: false,
     lastNetSound: 0,
     pendingInputTaps: new Set(),
-    serverUrl: "",
   };
 
   const difficulty = {
@@ -240,11 +233,15 @@
       return;
     }
     if (state.matchMode === "online" && !online.role) {
-      setOnlineStatus("请先创建或加入房间。");
+      setOnlineStatus("请先创建邀请，或粘贴邀请码加入对战。");
+      return;
+    }
+    if (state.matchMode === "online" && online.role === "guest") {
+      setOnlineStatus("等待房主开始比赛。");
       return;
     }
     if (state.matchMode === "online" && online.role === "host" && !online.connected) {
-      setOnlineStatus(`房间 ${online.roomCode} 等待对手加入后再开局。`);
+      setOnlineStatus("等待对手连接后再开局。");
       return;
     }
     state.score.left = 0;
@@ -316,14 +313,12 @@
     const onlineLabel =
       state.matchMode === "online"
         ? online.connected
-          ? online.roomCode
-            ? `房间 ${online.roomCode} 已连接`
-            : "联机已连接"
+          ? "邀请已连接"
           : online.role
-            ? online.roomCode
-              ? `房间 ${online.roomCode} 等待中`
-              : "联机配对中"
-            : "联机未连接"
+            ? online.role === "host"
+              ? "等待应答"
+              : "等待房主"
+            : "等待邀请"
         : difficulty[state.difficulty].label;
     statusStrip.textContent = `${rule} | ${serverLabel} | ${onlineLabel} | ${playStyles[state.playStyle].label}`;
     startSummary.textContent = `${modeLabelText()} | ${state.targetScore}分制 | ${playStyles[state.playStyle].label}球路`;
@@ -333,12 +328,12 @@
   }
 
   function matchCopy() {
-    if (state.matchMode === "online") return `房间模式：房主蓝队，对手红队，先到 ${state.targetScore} 分获胜。`;
+    if (state.matchMode === "online") return `邀请对战：房主蓝队，对手红队，先到 ${state.targetScore} 分获胜。`;
     return `抢落点、跳扣杀，先到 ${state.targetScore} 分获胜。`;
   }
 
   function modeLabelText() {
-    if (state.matchMode === "online") return "房间模式";
+    if (state.matchMode === "online") return "邀请对战";
     if (state.matchMode === "local") return "本地双人";
     return "单人模式";
   }
@@ -384,7 +379,6 @@
   }
 
   function applySettingsToUi() {
-    roomServerInput.value = defaultRoomServerUrl();
     syncMatchModeButtons();
     difficultyButtons.forEach((button) => {
       button.classList.toggle("active", button.dataset.difficulty === state.difficulty);
@@ -398,17 +392,16 @@
     assistButton.textContent = state.assist ? "辅助" : "硬核";
     soundButton.textContent = state.muted ? "静音" : "音效";
     onlinePanel.hidden = state.matchMode !== "online";
-    if (state.matchMode === "online") startRoomBrowser();
+    if (state.matchMode === "online") startInviteMode();
     updateHud();
   }
 
   function setMatchMode(matchMode, restart = false) {
     state.matchMode = matchMode;
     state.singlePlayer = matchMode === "solo";
-    if (matchMode === "online") startRoomBrowser();
-    if (matchMode !== "online" && (online.ws || online.roomChannel || online.role)) {
+    if (matchMode === "online") startInviteMode();
+    if (matchMode !== "online" && (online.peerConnection || online.roomChannel || online.role)) {
       resetOnlineConnection();
-      closeRoomServer();
     }
     onlinePanel.hidden = matchMode !== "online";
     saveSettings();
@@ -568,34 +561,14 @@
     button.addEventListener("pointerleave", end);
   });
 
-  refreshRoomsButton.addEventListener("click", () => refreshOnlineRooms(true));
-  createRoomButton.addEventListener("click", createOnlineRoom);
+  createRoomButton.addEventListener("click", createOnlineOffer);
+  acceptAnswerButton.addEventListener("click", acceptOnlineAnswer);
+  joinRoomButton.addEventListener("click", joinOnlineOffer);
   resetOnlineButton.addEventListener("click", resetOnlineConnection);
-  roomList.addEventListener("click", (event) => {
-    const row = event.target.closest("[data-room-code]");
-    if (!row || row.disabled) return;
-    joinOnlineRoom(row.dataset.roomCode);
-  });
-  roomServerInput.addEventListener("change", () => {
-    const value = roomServerInput.value.trim();
-    try {
-      localStorage.setItem(roomServerKey, value);
-    } catch {
-      // Server address persistence is optional.
-    }
-    if (state.matchMode === "online") {
-      closeRoomServer();
-      refreshOnlineRooms(true);
-    }
-  });
 
   function setOnlineStatus(text) {
     onlineStatus.textContent = text;
     updateHud();
-  }
-
-  function normalizeRoomCode(value) {
-    return value.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
   }
 
   function randomRoomCode() {
@@ -606,273 +579,211 @@
     return `stick-badminton-room-${code}`;
   }
 
-  function defaultRoomServerUrl() {
-    return defaultRoomServer;
+  function encodeSignal(value) {
+    return btoa(unescape(encodeURIComponent(JSON.stringify(value))));
   }
 
-  function roomServerUrl() {
-    return roomServerInput.value.trim();
+  function decodeSignal(value) {
+    return JSON.parse(decodeURIComponent(escape(atob(value.trim()))));
   }
 
-  function createRoomRecord(code, hostId = online.clientId) {
-    return {
-      code,
-      hostId,
-      title: `房间 ${code}`,
-      players: online.connected ? 2 : 1,
-      capacity: 2,
-      status: online.connected ? "playing" : "waiting",
+  async function waitForIceGathering(peer) {
+    if (peer.iceGatheringState === "complete") return;
+    await new Promise((resolve) => {
+      const done = () => {
+        if (peer.iceGatheringState !== "complete") return;
+        peer.removeEventListener("icegatheringstatechange", done);
+        resolve();
+      };
+      peer.addEventListener("icegatheringstatechange", done);
+      setTimeout(resolve, 2400);
+    });
+  }
+
+  function clearInviteFields(clearGuest = false) {
+    hostOfferOutput.value = "";
+    hostAnswerInput.value = "";
+    if (clearGuest) {
+      guestOfferInput.value = "";
+      guestAnswerOutput.value = "";
+    }
+  }
+
+  function startInviteMode() {
+    if (!online.rtcSupported) {
+      setOnlineStatus("当前浏览器不支持 WebRTC 邀请对战。");
+      return;
+    }
+    setOnlineStatus("创建邀请后复制给对手；对手粘贴邀请码并回传应答码即可连接。");
+  }
+
+  function createPeerConnection(role) {
+    closePeerConnection();
+    online.peerConnection = new RTCPeerConnection({
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    });
+    online.peerConnection.onconnectionstatechange = () => {
+      const status = online.peerConnection.connectionState;
+      if (status === "connected") {
+        online.connected = true;
+        setOnlineStatus(role === "host" ? "邀请对战已连接 | 你控制蓝队。" : "邀请对战已连接 | 你控制红队。");
+        if (role === "host") sendOnlineSnapshot(true);
+      } else if (["failed", "disconnected", "closed"].includes(status)) {
+        online.connected = false;
+        setOnlineStatus("点对点连接已断开，可以重新创建邀请。");
+      }
+      updateHud();
+    };
+    online.peerConnection.ondatachannel = (event) => bindDataChannel(event.channel);
+    return online.peerConnection;
+  }
+
+  function bindDataChannel(channel) {
+    online.dataChannel = channel;
+    channel.onopen = () => {
+      online.connected = true;
+      setOnlineStatus(online.role === "host" ? "邀请对战已连接 | 你控制蓝队。" : "邀请对战已连接 | 你控制红队。");
+      if (online.role === "guest") sendOnlineInput(true);
+      if (online.role === "host") sendOnlineSnapshot(true);
+    };
+    channel.onmessage = (event) => {
+      try {
+        receiveOnlinePacket(JSON.parse(event.data));
+      } catch {
+        setOnlineStatus("收到无法识别的对战消息。");
+      }
+    };
+    channel.onclose = () => {
+      online.connected = false;
+      setOnlineStatus("点对点连接已断开，可以重新创建邀请。");
+      updateHud();
+    };
+  }
+
+  function enterOnlineRoom(role, code, transport) {
+    closeRoomChannel();
+    state.matchMode = "online";
+    online.transport = transport;
+    online.role = role;
+    online.roomCode = code || randomRoomCode();
+    online.peerId = "";
+    online.connected = false;
+    online.snapshotSeq = 0;
+    online.lastSnapshotSeq = 0;
+    online.lastSnapshot = 0;
+    online.lastSnapshotReceived = 0;
+    online.lastInputSent = 0;
+    online.lastHudUpdate = 0;
+    online.lastScoreLeft = 0;
+    online.lastScoreRight = 0;
+    online.lastWinner = null;
+    online.lastRallyHits = 0;
+    online.lastBirdTouched = null;
+    online.lastBirdServed = false;
+    online.lastNetSound = 0;
+    online.pendingInputTaps.clear();
+    remoteKeys.clear();
+    remoteTaps.clear();
+    remoteInputBuffer.clear();
+  }
+
+  async function createOnlineOffer() {
+    setMatchMode("online", false);
+    if (!online.rtcSupported) {
+      setOnlineStatus("当前浏览器不支持 WebRTC 邀请对战。");
+      return;
+    }
+    resetOnlineConnection(false);
+    clearInviteFields();
+    enterOnlineRoom("host", randomRoomCode(), "webrtc");
+    const peer = createPeerConnection("host");
+    bindDataChannel(peer.createDataChannel("match", { ordered: false, maxRetransmits: 0 }));
+    const offer = await peer.createOffer();
+    await peer.setLocalDescription(offer);
+    await waitForIceGathering(peer);
+    hostOfferOutput.value = encodeSignal({
+      v: 1,
+      role: "host",
+      roomCode: online.roomCode,
       targetScore: state.targetScore,
       playStyle: state.playStyle,
-      updatedAt: Date.now(),
-    };
-  }
-
-  function roomStatusText(room) {
-    if (room.status === "playing") return "比赛中";
-    if (room.status === "full") return "已满";
-    return "等待中";
-  }
-
-  function renderRoomList() {
-    const rooms = [...online.rooms].sort((a, b) => {
-      const aOpen = a.status === "waiting" ? 0 : 1;
-      const bOpen = b.status === "waiting" ? 0 : 1;
-      return aOpen - bOpen || (b.updatedAt || 0) - (a.updatedAt || 0);
+      description: peer.localDescription,
     });
-    roomList.querySelectorAll(".room-row").forEach((item) => item.remove());
-    roomEmpty.hidden = rooms.length > 0;
-    roomEmpty.textContent = online.transport === "websocket" ? "暂无可加入房间。" : "暂无本机房间，可创建后用同源多标签加入。";
-    rooms.forEach((room) => {
-      const row = document.createElement("button");
-      const locked = room.status !== "waiting" || room.players >= room.capacity || room.hostId === online.clientId;
-      const title = document.createElement("strong");
-      const action = document.createElement("span");
-      const detail = document.createElement("span");
-      row.className = "room-row";
-      row.type = "button";
-      row.disabled = locked;
-      row.dataset.roomCode = room.code;
-      action.className = "room-action";
-      title.textContent = room.title || `房间 ${room.code}`;
-      action.textContent = locked ? roomStatusText(room) : "加入";
-      detail.textContent = `${roomStatusText(room)} · ${room.players || 1}/${room.capacity || 2} · ${room.targetScore || state.targetScore}分制 · ${playStyles[room.playStyle]?.label || playStyles.standard.label}`;
-      row.append(title, action, detail);
-      roomList.append(row);
-    });
+    setOnlineStatus("邀请码已生成：复制给对手，收到应答码后粘贴并点击“接受应答”。");
   }
 
-  function readLocalRooms() {
+  async function acceptOnlineAnswer() {
+    if (!online.peerConnection || online.role !== "host") {
+      setOnlineStatus("请先创建邀请。");
+      return;
+    }
     try {
-      const raw = localStorage.getItem(roomStorageKey);
-      const rooms = raw ? JSON.parse(raw) : [];
-      const now = Date.now();
-      const fresh = rooms.filter((room) => now - (room.updatedAt || 0) < 10000);
-      if (fresh.length !== rooms.length) localStorage.setItem(roomStorageKey, JSON.stringify(fresh));
-      return fresh;
+      const signal = decodeSignal(hostAnswerInput.value);
+      await online.peerConnection.setRemoteDescription(signal.description);
+      setOnlineStatus("已接受应答，正在建立点对点连接...");
     } catch {
-      return [];
+      setOnlineStatus("应答码无效，请重新粘贴对手生成的内容。");
     }
   }
 
-  function writeLocalRooms(rooms) {
+  async function joinOnlineOffer() {
+    setMatchMode("online", false);
+    if (!online.rtcSupported) {
+      setOnlineStatus("当前浏览器不支持 WebRTC 邀请对战。");
+      return;
+    }
     try {
-      localStorage.setItem(roomStorageKey, JSON.stringify(rooms));
+      const signal = decodeSignal(guestOfferInput.value);
+      resetOnlineConnection(false);
+      guestAnswerOutput.value = "";
+      state.targetScore = Number(signal.targetScore) === 11 ? 11 : 7;
+      state.playStyle = signal.playStyle === "fun" ? "fun" : "standard";
+      applySettingsToUi();
+      enterOnlineRoom("guest", signal.roomCode || randomRoomCode(), "webrtc");
+      const peer = createPeerConnection("guest");
+      await peer.setRemoteDescription(signal.description);
+      const answer = await peer.createAnswer();
+      await peer.setLocalDescription(answer);
+      await waitForIceGathering(peer);
+      guestAnswerOutput.value = encodeSignal({
+        v: 1,
+        role: "guest",
+        roomCode: online.roomCode,
+        description: peer.localDescription,
+      });
+      setOnlineStatus("应答码已生成：复制给房主，等待房主接受后自动连接。");
     } catch {
-      // Local fallback simply becomes roomless when storage is unavailable.
+      setOnlineStatus("邀请码无效，请重新粘贴房主生成的内容。");
     }
   }
 
-  function upsertLocalRoom(room) {
-    const rooms = readLocalRooms().filter((item) => item.code !== room.code);
-    rooms.push({ ...room, updatedAt: Date.now() });
-    writeLocalRooms(rooms);
-    notifyLocalLobby();
+  function createOnlineRoom() {
+    createOnlineOffer();
   }
 
-  function removeLocalRoom(code) {
-    writeLocalRooms(readLocalRooms().filter((room) => room.code !== code));
-    notifyLocalLobby();
+  function joinOnlineRoom() {
+    joinOnlineOffer();
   }
 
-  function notifyLocalLobby() {
-    if (online.lobbyChannel) online.lobbyChannel.postMessage({ type: "rooms-changed" });
+  function closePeerConnection() {
+    if (online.dataChannel) online.dataChannel.close();
+    if (online.peerConnection) online.peerConnection.close();
+    online.dataChannel = null;
+    online.peerConnection = null;
   }
 
-  function ensureLobbyChannel() {
-    if (!online.localSupported || online.lobbyChannel) return;
-    online.lobbyChannel = new BroadcastChannel(roomLobbyChannelName);
-    online.lobbyChannel.onmessage = () => {
-      if (state.matchMode === "online" && online.transport !== "websocket") refreshOnlineRooms(false);
-    };
-  }
-
-  function startOnlineTimers() {
-    if (!online.refreshTimer) online.refreshTimer = setInterval(() => refreshOnlineRooms(false), 2500);
-    if (!online.heartbeatTimer) online.heartbeatTimer = setInterval(sendRoomHeartbeat, 1800);
-  }
-
-  function startRoomBrowser() {
-    ensureLobbyChannel();
-    roomServerInput.value = roomServerInput.value || defaultRoomServerUrl();
-    startOnlineTimers();
-    refreshOnlineRooms(false);
-  }
-
-  function connectRoomServer() {
-    const url = roomServerUrl();
-    if (!url || !online.wsSupported) return false;
-    if (online.ws && online.serverUrl !== url) closeRoomServer();
-    if (online.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(online.ws.readyState)) return true;
-    online.serverUrl = url;
-    try {
-      online.ws = new WebSocket(url);
-    } catch {
-      online.ws = null;
-      online.serverUrl = "";
-      return false;
-    }
-    online.ws.onopen = () => {
-      online.transport = "websocket";
-      sendServerMessage({ type: "hello", clientId: online.clientId });
-      sendServerMessage({ type: "list-rooms" });
-      setOnlineStatus("房间服务已连接，可以创建或加入房间。");
-    };
-    online.ws.onmessage = (event) => {
-      try {
-        receiveServerMessage(JSON.parse(event.data));
-      } catch {
-        setOnlineStatus("收到无法识别的房间服务消息。");
-      }
-    };
-    online.ws.onerror = () => {
-      if (online.transport !== "websocket") setOnlineStatus("房间服务不可用，已切到本机房间列表。");
-    };
-    online.ws.onclose = () => {
-      if (online.transport === "websocket") setOnlineStatus("房间服务断开，已切到本机房间列表。");
-      online.ws = null;
-      online.serverUrl = "";
-      online.transport = "local";
-      if (!online.role) {
-        online.rooms = readLocalRooms();
-        renderRoomList();
-      }
-    };
-    return true;
-  }
-
-  function closeRoomServer() {
-    if (!online.ws) return;
-    online.ws.onclose = null;
-    online.ws.close();
-    online.ws = null;
-    online.serverUrl = "";
-    online.transport = "local";
-  }
-
-  function sendServerMessage(packet) {
-    if (!online.ws || online.ws.readyState !== WebSocket.OPEN) return false;
-    online.ws.send(JSON.stringify({ clientId: online.clientId, ...packet }));
-    return true;
-  }
-
-  function receiveServerMessage(packet) {
-    if (packet.type === "rooms") {
-      online.rooms = packet.rooms || [];
-      renderRoomList();
-      return;
-    }
-    if (packet.type === "room-created") {
-      enterOnlineRoom("host", packet.room.code, "websocket");
-      online.rooms = packet.rooms || online.rooms;
-      renderRoomList();
-      setOnlineStatus(`房间 ${online.roomCode} 已创建 | 等待对手加入。`);
-      return;
-    }
-    if (packet.type === "room-joined") {
-      enterOnlineRoom("guest", packet.room.code, "websocket");
-      online.peerId = packet.hostId || packet.room.hostId || "";
-      online.connected = true;
-      online.rooms = packet.rooms || online.rooms;
-      renderRoomList();
-      setOnlineStatus(`已加入房间 ${online.roomCode} | 你控制红队。`);
-      sendOnlineInput(true);
-      return;
-    }
-    if (packet.type === "peer-joined" && online.role === "host") {
-      online.peerId = packet.peerId || "";
-      online.connected = true;
-      setOnlineStatus(`房间 ${online.roomCode} 已连接 | 你控制蓝队。`);
-      sendOnlineSnapshot(true);
-      return;
-    }
-    if (packet.type === "peer-left") {
-      online.connected = false;
-      remoteKeys.clear();
-      remoteTaps.clear();
-      remoteInputBuffer.clear();
-      setOnlineStatus(`房间 ${online.roomCode} 对手已离开。`);
-      return;
-    }
-    if (packet.type === "relay") {
-      receiveOnlinePacket({ ...packet.payload, senderId: packet.senderId });
-      return;
-    }
-    if (packet.type === "error") {
-      setOnlineStatus(packet.message || "房间服务返回错误。");
-    }
-  }
-
-  function refreshOnlineRooms(forceServer) {
-    if (state.matchMode !== "online") return;
-    if (forceServer || !online.ws) connectRoomServer();
-    if (sendServerMessage({ type: "list-rooms" })) return;
-    online.transport = "local";
-    online.rooms = readLocalRooms();
-    renderRoomList();
-    if (!online.role) setOnlineStatus("本机房间列表 | 开启 room-server.js 后可跨设备加入。");
-  }
-
-  function createRoomEnvelope(packet) {
-    return {
-      senderId: online.clientId,
-      targetId: online.peerId || packet.targetId || "",
-      packet,
-    };
-  }
-
-  function sendRoomPacket(packet) {
-    if (!online.roomChannel) return false;
-    online.roomChannel.postMessage(createRoomEnvelope(packet));
-    return true;
+  function closeRoomChannel() {
+    if (online.roomChannel) online.roomChannel.close();
+    online.roomChannel = null;
   }
 
   function sendOnlineMessage(packet) {
-    let sent = false;
-    if (online.transport === "websocket" && online.roomCode) {
-      sent = sendServerMessage({ type: "relay", roomCode: online.roomCode, payload: packet }) || sent;
-    }
-    if (sendRoomPacket(packet)) sent = true;
-    return sent;
+    if (!online.dataChannel || online.dataChannel.readyState !== "open") return false;
+    online.dataChannel.send(JSON.stringify(packet));
+    return true;
   }
 
   function receiveOnlinePacket(packet) {
-    if (packet.type === "hello" && online.role === "host") {
-      online.peerId = packet.senderId;
-      online.connected = true;
-      sendOnlineMessage({ type: "welcome", targetId: online.peerId, hostId: online.clientId });
-      if (online.transport === "local") upsertLocalRoom(createRoomRecord(online.roomCode));
-      setOnlineStatus(`房间 ${online.roomCode} 已连接 | 你控制蓝队`);
-      sendOnlineSnapshot(true);
-      return;
-    }
-    if (packet.type === "welcome" && online.role === "guest") {
-      online.peerId = packet.hostId || packet.senderId;
-      online.connected = true;
-      setOnlineStatus(`已加入房间 ${online.roomCode} | 你控制红队`);
-      sendOnlineInput(true);
-      return;
-    }
     if (packet.type === "input" && online.role === "host") {
       remoteKeys.clear();
       remoteTaps.clear();
@@ -893,129 +804,26 @@
     }
   }
 
-  function enterOnlineRoom(role, code, transport) {
-    closeRoomChannel();
-    state.matchMode = "online";
-    online.transport = transport;
-    online.role = role;
-    online.roomCode = normalizeRoomCode(code);
-    online.peerId = "";
-    online.connected = false;
-    online.snapshotSeq = 0;
-    online.lastSnapshotSeq = 0;
-    online.lastSnapshot = 0;
-    online.lastSnapshotReceived = 0;
-    online.lastInputSent = 0;
-    online.lastHudUpdate = 0;
-    online.lastScoreLeft = 0;
-    online.lastScoreRight = 0;
-    online.lastWinner = null;
-    online.lastRallyHits = 0;
-    online.lastBirdTouched = null;
-    online.lastBirdServed = false;
-    online.lastNetSound = 0;
-    online.pendingInputTaps.clear();
-    remoteKeys.clear();
-    remoteTaps.clear();
-    remoteInputBuffer.clear();
-    if (transport === "local" && online.localSupported) {
-      online.roomChannel = new BroadcastChannel(makeRoomChannelName(online.roomCode));
-      online.roomChannel.onmessage = (event) => {
-        const envelope = event.data || {};
-        const packet = envelope.packet;
-        if (!packet || envelope.senderId === online.clientId) return;
-        if (envelope.targetId && envelope.targetId !== online.clientId) return;
-        receiveOnlinePacket({ ...packet, senderId: envelope.senderId });
-      };
-    }
-  }
-
-  function closeRoomChannel() {
-    if (online.roomChannel) online.roomChannel.close();
-    online.roomChannel = null;
-  }
-
-  function createLocalRoom() {
-    if (!online.localSupported) {
-      setOnlineStatus("当前浏览器不支持本机房间列表，请启动 WebSocket 房间服务。");
-      return;
-    }
-    const code = randomRoomCode();
-    enterOnlineRoom("host", code, "local");
-    upsertLocalRoom(createRoomRecord(code));
-    renderRoomList();
-    setOnlineStatus(`房间 ${online.roomCode} 已创建 | 等待本机同源标签页加入。`);
-  }
-
-  function createOnlineRoom() {
-    setMatchMode("online", false);
-    if (sendServerMessage({
-      type: "create-room",
-      targetScore: state.targetScore,
-      playStyle: state.playStyle,
-    })) {
-      setOnlineStatus("正在创建线上房间...");
-      return;
-    }
-    createLocalRoom();
-  }
-
-  function joinOnlineRoom(code) {
-    setMatchMode("online", false);
-    const roomCode = normalizeRoomCode(code);
-    if (!roomCode) return;
-    if (sendServerMessage({ type: "join-room", roomCode })) {
-      setOnlineStatus(`正在加入房间 ${roomCode}...`);
-      return;
-    }
-    const room = readLocalRooms().find((item) => item.code === roomCode);
-    if (!room || room.status !== "waiting") {
-      setOnlineStatus("这个房间已不可加入。");
-      refreshOnlineRooms(false);
-      return;
-    }
-    enterOnlineRoom("guest", roomCode, "local");
-    setOnlineStatus(`正在加入房间 ${online.roomCode}...`);
-    sendRoomPacket({ type: "hello", senderId: online.clientId });
-  }
-
-  function sendRoomHeartbeat() {
-    if (state.matchMode !== "online" || !online.role || !online.roomCode) return;
-    if (online.transport === "websocket") {
-      sendServerMessage({
-        type: "room-heartbeat",
-        roomCode: online.roomCode,
-        status: online.connected ? "playing" : "waiting",
-        targetScore: state.targetScore,
-        playStyle: state.playStyle,
-      });
-      return;
-    }
-    if (online.role === "host") {
-      upsertLocalRoom(createRoomRecord(online.roomCode));
-    }
-  }
-
   function syncOnlineRoomSettings() {
     if (state.matchMode !== "online" || online.role !== "host" || !online.roomCode) return;
-    sendRoomHeartbeat();
     sendOnlineSnapshot(true);
   }
 
   function resetOnlineConnection(clearSignals = true) {
-    if (online.role === "host" && online.transport === "local" && online.roomCode) removeLocalRoom(online.roomCode);
-    if (online.roomCode) sendServerMessage({ type: "leave-room", roomCode: online.roomCode });
+    closePeerConnection();
     closeRoomChannel();
     online.role = null;
     online.connected = false;
     online.roomCode = "";
     online.peerId = "";
+    online.transport = "invite";
+    online.pendingInputTaps.clear();
     remoteKeys.clear();
     remoteTaps.clear();
     remoteInputBuffer.clear();
     if (clearSignals) {
-      setOnlineStatus("未进入房间 | 可刷新、创建或加入房间。");
-      refreshOnlineRooms(false);
+      clearInviteFields(true);
+      setOnlineStatus("已断开。创建邀请后复制给对手；对手粘贴邀请码并回传应答码即可连接。");
     }
   }
 

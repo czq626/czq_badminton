@@ -36,10 +36,10 @@
               <strong>本地双人</strong>
               <small>同屏键盘或触控对战</small>
             </button>
-            <button class="mode-card" type="button" data-match-mode="online">
+            <button class="mode-card" type="button" data-match-mode="online" hidden>
               <span class="mode-icon">ROOM</span>
-              <strong>房间模式</strong>
-              <small>房间列表，创建或加入</small>
+              <strong>邀请对战</strong>
+              <small>复制邀请码，点对点连接</small>
             </button>
           </div>
 
@@ -69,18 +69,30 @@
           </div>
 
           <div class="online-panel" id="onlinePanel" hidden>
-            <div class="online-status" id="onlineStatus">连接房间服务后显示房间列表；离线时可本机多标签测试。</div>
-            <div class="room-server-row">
-              <label>
-                房间服务
-                <input id="roomServerInput" type="url" autocomplete="off" placeholder="ws://localhost:8787" />
-              </label>
-              <button id="refreshRoomsButton" type="button">刷新</button>
-              <button id="createRoomButton" type="button">创建房间</button>
+            <div class="online-status" id="onlineStatus">创建邀请后复制给对手；对手粘贴邀请码并回传应答码即可连接。</div>
+            <div class="invite-actions">
+              <button id="createRoomButton" type="button">创建邀请</button>
               <button id="resetOnlineButton" type="button">断开</button>
             </div>
-            <div class="room-list" id="roomList" aria-label="房间列表">
-              <div class="room-empty" id="roomEmpty">暂无可加入房间。</div>
+            <div class="invite-grid" aria-label="邀请对战配对">
+              <label>
+                给对手的邀请码
+                <textarea id="hostOfferOutput" readonly placeholder="点击“创建邀请”后复制这里的内容"></textarea>
+              </label>
+              <label>
+                对手回传的应答码
+                <textarea id="hostAnswerInput" placeholder="粘贴对手生成的应答码"></textarea>
+              </label>
+              <button id="acceptAnswerButton" type="button">接受应答</button>
+              <label>
+                粘贴房主邀请码
+                <textarea id="guestOfferInput" placeholder="粘贴对手发来的邀请码"></textarea>
+              </label>
+              <button id="joinRoomButton" type="button">加入并生成应答</button>
+              <label>
+                回传给房主的应答码
+                <textarea id="guestAnswerOutput" readonly placeholder="加入后复制这里的内容给房主"></textarea>
+              </label>
             </div>
           </div>
 

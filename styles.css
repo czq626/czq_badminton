@@ -221,8 +221,12 @@ button:active {
 
 .mode-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.mode-card[hidden] {
+  display: none;
 }
 
 .mode-card {
@@ -295,8 +299,8 @@ button:active {
 }
 
 .online-status,
-.room-server-row,
-.room-list {
+.invite-actions,
+.invite-grid {
   grid-column: 1 / -1;
 }
 
@@ -307,83 +311,24 @@ button:active {
   line-height: 1.5;
 }
 
-.room-server-row {
+.invite-actions {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  align-items: end;
 }
 
-.room-server-row button {
+.invite-actions button,
+.invite-grid button {
   min-height: 36px;
   padding: 8px 10px;
   font-size: 12px;
   font-weight: 800;
 }
 
-.room-list {
+.invite-grid {
   display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 8px;
-  max-height: 168px;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.room-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px 12px;
-  align-items: center;
-  width: 100%;
-  min-height: 52px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.055);
-  color: var(--ink);
-  padding: 9px 10px;
-  text-align: left;
-}
-
-.room-row:hover,
-.room-row:focus-visible {
-  border-color: rgba(47, 211, 155, 0.52);
-  background: rgba(47, 211, 155, 0.11);
-}
-
-.room-row:disabled {
-  cursor: default;
-  opacity: 0.58;
-}
-
-.room-row strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-}
-
-.room-row span {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.room-row .room-action {
-  grid-row: 1 / span 2;
-  grid-column: 2;
-  color: var(--green);
-  font-size: 12px;
-}
-
-.room-empty {
-  min-height: 48px;
-  border: 1px dashed rgba(255, 255, 255, 0.14);
-  border-radius: 4px;
-  color: var(--muted);
-  display: grid;
-  place-items: center;
-  font-size: 12px;
-  font-weight: 800;
 }
 
 .online-panel label {
@@ -410,7 +355,8 @@ input {
 
 textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 62px;
+  max-height: 118px;
   resize: vertical;
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 4px;
@@ -418,6 +364,10 @@ textarea {
   color: var(--ink);
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   padding: 8px;
+}
+
+.invite-grid button {
+  align-self: end;
 }
 
 input::placeholder,
@@ -821,19 +771,20 @@ kbd {
     line-height: 1.35;
   }
 
-  .room-server-row {
-    grid-template-columns: minmax(0, 1fr) auto auto auto;
-    gap: 6px;
-  }
-
-  .room-server-row button {
+  .invite-actions button,
+  .invite-grid button {
     min-height: 32px;
     padding: 8px 9px;
     font-size: 11px;
   }
 
-  .room-list {
-    max-height: 126px;
+  .invite-grid {
+    gap: 6px;
+  }
+
+  textarea {
+    min-height: 50px;
+    max-height: 88px;
   }
 
   .primary-start,
@@ -930,12 +881,8 @@ kbd {
     min-height: 82px;
   }
 
-  .room-server-row {
-    grid-template-columns: 1fr 1fr 1fr;
-  }
-
-  .room-server-row label {
-    grid-column: 1 / -1;
+  .invite-grid {
+    grid-template-columns: 1fr;
   }
 
   .hud {
